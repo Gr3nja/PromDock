@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  PromDock build script (MSVC)
-rem    build.bat        : build  -> build\PromDock.exe
+rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c を1つのexeに)
 rem    build.bat run    : build and launch
 rem
 rem  Works in any of these situations:
@@ -19,6 +19,11 @@ set "VCVARS="
 
 if not exist "%SRC%" (
     echo [ERROR] %SRC% not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "launcher.c" (
+    echo [ERROR] launcher.c not found next to build.bat.
     set "RC=1"
     goto :done
 )
@@ -62,7 +67,7 @@ rem --- a running PromDock locks the exe, so close it first ---
 taskkill /f /im PromDock.exe >nul 2>nul
 
 echo Building PromDock ...
-cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" /link /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c /link /SUBSYSTEM:WINDOWS
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed.

@@ -1,3 +1,27 @@
+/*
+ * promdock.c - PromDock: NeXuS Dock風フローティングドック (Win32 / C / MSVC)
+ *
+ * ビルド:
+ *     build.bat をダブルクリック (または実行) するだけです。
+ *     Visual Studio / Build Tools を自動検出し、build\PromDock.exe を生成します。
+ *     ※ ソースはUTF-8です。build.bat は /utf-8 を付けてコンパイルします。
+ *
+ * 機能:
+ *   - Macのような薄いダークグレー半透明のドック (枠線・区切り線なし)
+ *   - ホバー: 触ったアイコンとその周辺が滑らかに少し拡大 / 起動バウンス / ラベル表示
+ *   - ドラッグ&ドロップ
+ *       ファイルやフォルダをドロップ ..... ドックに追加 (落とした位置に挿入)
+ *       アイコンをドックの外へドラッグ ... そのまま離すと削除
+ *       ドック内でドラッグ ............... 並べ替え
+ *   - 初期状態は空。追加したアプリだけを表示 / 起動中のアプリの下に丸を1つ表示
+ *   - クリック: 未起動なら起動 / 実行中で前面ならもう一度クリックで最小化(収縮) / 裏・最小化中なら前面へ
+ *       Shift+クリック or 中クリック: 新しく起動
+ *   - 右クリック: ウィンドウを閉じる / 新しく起動 / 固定・削除 / 設定 / 終了
+ *       設定: 向き(横/縦) / 位置(下・上・左・右) / 自動的に隠す / 隠れるまでの時間
+ *   - Ctrl+ドラッグでドックを自由に移動 (一番近い画面の端に吸着)
+ *   - 設定は exe と同じフォルダの promdock.txt (UTF-8) に保存
+ *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
+ */
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
 #define _UNICODE
@@ -17,6 +41,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* launcher.c (同じexeにリンクされるランチャー) */
+void Launcher_Init(HINSTANCE hInst);
+void Launcher_Toggle(void);
+void Launcher_Shutdown(void);
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
@@ -60,7 +89,7 @@ typedef struct
     wchar_t spec[MAX_PATH * 2]; /* promdock.txt に書く文字列 (パス) */
     wchar_t name[128];          /* ラベル */
     wchar_t exe[MAX_PATH];      /* 実行中判定用のexeパス (不明なら空) */
-    wchar_t proc[64];           /* 追加: --processStart で起動される実プロセス名 (例: Discord.exe) */
+    wchar_t proc[64];           /* --processStart で起動される実プロセス名 (例: Discord.exe) */
     BOOL pinned;
     DWORD launchTick;
     BOOL iconOk;               /* FALSE: アイコン取得失敗(仮アイコン)。後で再取得する */
@@ -224,7 +253,8 @@ static BOOL EndsWithI(const wchar_t *s, const wchar_t *suffix)
     return a >= b && _wcsicmp(s + a - b, suffix) == 0;
 }
 
-/* .exe ならそのパス、.lnk ならリンク先を exe に入れる */
+/* .exe ならそのパス、.lnk ならリンク先を exe に入れる。
+ * Discord等 (Update.exe --processStart Discord.exe) は実プロセス名を proc に入れる */
 static void ResolveExe(const wchar_t *spec, wchar_t *exe, size_t cch, wchar_t *proc)
 {
     wchar_t path[MAX_PATH * 2];
@@ -253,7 +283,6 @@ static void ResolveExe(const wchar_t *spec, wchar_t *exe, size_t cch, wchar_t *p
                     {
                         ExpandEnvironmentStringsW(t, exe, (DWORD)cch);
                     }
-                    /* Discord等: Update.exe --processStart Discord.exe の実プロセス名を取る */
                     wchar_t args[1024];
                     if (SUCCEEDED(IShellLinkW_GetArguments(psl, args, 1024)))
                     {
@@ -785,7 +814,6 @@ static int RefreshRunning(void)
             }
         if (idx >= 0)
         {
-            /* ここから下は元のまま */
             Item *it = &g_items[idx];
             if (it->nwin < MAX_WINS)
                 it->wins[it->nwin++] = g_win[k].h;
@@ -1188,7 +1216,6 @@ static void DrawDot(float cx, float cy, float r, float R, float G, float B, floa
         }
 }
 
-/* 起動中のアプリ: アイコンの画面端側に丸を1つ */
 /* クリック起動から15秒間は「起動中」扱い (検出が遅いアプリ用) */
 static BOOL IsPending(const Item *it)
 {
@@ -1202,6 +1229,7 @@ static BOOL AnyPending(void)
     return FALSE;
 }
 
+/* 起動中のアプリ: アイコンの画面端側に丸を1つ */
 static void DrawIndicator(const Item *it)
 {
     if (it->nwin <= 0 && !IsPending(it))
@@ -1210,6 +1238,7 @@ static void DrawIndicator(const Item *it)
     L2W(it->cx, g_margin + g_pady * 0.38f, &x, &y);
     DrawDot(x, y, 2.6f * g_dpi, 235.f, 235.f, 240.f, 0.95f);
 }
+
 /* ラベル (GDIで白文字をマスクに描き、自前で合成) */
 static void BuildLabel(const wchar_t *text)
 {
@@ -1493,6 +1522,7 @@ static void ShowContextMenu(HWND hwnd, int hit)
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_STRING | (g_autohide ? MF_CHECKED : 0), 6, L"自動的に隠す");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mt, L"隠れるまでの時間");
+    AppendMenuW(menu, MF_STRING, 30, L"ランチャーを開く (F11)");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)set, L"設定");
     AppendMenuW(menu, MF_STRING, 2, L"ドックを終了");
 
@@ -1547,6 +1577,9 @@ static void ShowContextMenu(HWND hwnd, int hit)
     case 5:
         if (hit >= 0)
             Launch(hit);
+        break;
+    case 30:
+        Launcher_Toggle();
         break;
     case 6:
         g_autohide = !g_autohide;
@@ -1975,7 +2008,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 ResizeDock();
                 Render();
             }
-            else if (r == 1 || iconFixed || AnyPending()) /* ← ここが⑥の変更箇所 */
+            else if (r == 1 || iconFixed || AnyPending())
                 Render();
         }
         return 0;
@@ -2150,6 +2183,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         wc.lpszClassName, L"PromDock", WS_POPUP, 0, 0, 100, 100, NULL, NULL, hInst, NULL);
 
     RegisterDragDrop(g_hwnd, &g_dropTarget);
+    Launcher_Init(hInst);
     g_leaveTick = GetTickCount();
     LoadConfig();
     RefreshRunning();
@@ -2171,6 +2205,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         FreeItem(&g_items[i]);
     free(g_lblMask);
     DestroyGhost();
+    Launcher_Shutdown();
     OleUninitialize();
     return 0;
 }

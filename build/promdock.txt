@@ -1,0 +1,12 @@
+@autohide=1
+@edge=2
+@frac=500
+@hidems=600
+C:\Users\Grenja _ Developer\Desktop\Discord.lnk
+C:\Users\Grenja _ Developer\Desktop\chrome.lnk
+C:\Users\Grenja _ Developer\Desktop\René - Chrome.lnk
+C:\Users\Public\Desktop\Prom.lnk
+C:\Users\Public\Desktop\Zen.lnk
+C:\Users\Grenja _ Developer\Desktop\Obsidian.lnk
+C:\Users\Grenja _ Developer\Desktop\VScode.lnk
+C:\Users\Grenja _ Developer\Desktop\ダウンロード.lnk

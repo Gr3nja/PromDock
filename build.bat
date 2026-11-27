@@ -76,7 +76,6 @@ if not exist build mkdir build
 rem --- a running PromDock locks the exe, so close it first ---
 taskkill /f /im PromDock.exe >nul 2>nul
 
-rem --- promdock.ico (build.bat と同じフォルダ) があれば exe に埋め込む ---
 rem --- ああああ ---
 set "RES="
 if exist "promdock.ico" if exist "promdock.rc" (

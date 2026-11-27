@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  PromDock build script (MSVC)
-rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c を1つのexeに)
+rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c を1つのexeに)
 rem    build.bat run    : build and launch
 rem
 rem  Works in any of these situations:
@@ -24,6 +24,16 @@ if not exist "%SRC%" (
 )
 if not exist "launcher.c" (
     echo [ERROR] launcher.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "setting.c" (
+    echo [ERROR] setting.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "searchbar.c" (
+    echo [ERROR] searchbar.c not found next to build.bat.
     set "RC=1"
     goto :done
 )
@@ -66,8 +76,22 @@ if not exist build mkdir build
 rem --- a running PromDock locks the exe, so close it first ---
 taskkill /f /im PromDock.exe >nul 2>nul
 
+rem --- promdock.ico (build.bat と同じフォルダ) があれば exe に埋め込む ---
+set "RES="
+if exist "promdock.ico" if exist "promdock.rc" (
+    rc /nologo /fo build\promdock.res promdock.rc
+    if errorlevel 1 (
+        echo [ERROR] Icon resource compile failed.
+        set "RC=1"
+        goto :done
+    )
+    set "RES=build\promdock.res"
+) else (
+    echo [info] promdock.ico / promdock.rc not found - building with the built-in icon.
+)
+
 echo Building PromDock ...
-cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c /link /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c %RES% /link /SUBSYSTEM:WINDOWS
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed.

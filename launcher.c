@@ -1,16 +1,21 @@
 /*
  * launcher.c - PromDock に組み込まれるランチャー (Launchpad風フルスクリーン)
  *
- * このファイルは promdock.c と一緒に1つの PromDock.exe にビルドされます:
- *     cl ... /Febuild\PromDock.exe promdock.c launcher.c /link /SUBSYSTEM:WINDOWS
+ * このファイルは promdock.c / setting.c と一緒に1つの PromDock.exe にビルドされます:
+ *     cl ... /Febuild\PromDock.exe promdock.c launcher.c setting.c /link /SUBSYSTEM:WINDOWS
  *
- * promdock.c から呼ぶ関数:
- *     Launcher_Init(hInst)  ... 起動時に1回 (ウィンドウ作成・F11登録・設定読み込み)
- *     Launcher_Toggle()     ... 開閉 (ドックの右クリックメニューから)
+ * promdock.c / setting.c から呼ぶ関数:
+ *     Launcher_Init(hInst)  ... 起動時に1回 (ウィンドウ作成・設定読み込み。F11は設定で有効な場合のみ登録)
+ *     Launcher_SetEnabled() ... 設定(setting.c)でランチャーを有効/無効にしたとき
+ *     Launcher_SetStyle()   ... 設定で表示方法(通常 / 画面端に隠してスライド)と端を変えたとき
+ *     Launcher_Toggle()     ... 開閉 (ドックの右クリックメニュー/トレイから)
+ *     Launcher_SetHotkey()  ... 設定でショートカットキーを変えたとき (登録できなければ元のキーに戻して FALSE)
+ *     Launcher_SetGrid()    ... 設定で列数・行数を変えたとき (0=自動)
  *     Launcher_Shutdown()   ... 終了時に1回
  *
  * 機能:
  *   - F11 (グローバルホットキー) でランチャーを開閉
+ *   - 設定で「画面の端に隠す」を選ぶと、端に小さなタブが出て、クリックで横/縦からスライド表示
  *   - 画面全体を覆う半透明の第二のデスクトップ。小さめのアイコンをページ単位のグリッドで表示
  *   - 最初は空。右クリックで「新しいファイルを作成」「新しいフォルダーを作成」
  *     (exe横の LauncherItems フォルダに実際に作成し、その場でランチャーに追加。名前変更も可能)
@@ -19,7 +24,7 @@
  *   - 入力するだけで絞り込み検索 / Enter で先頭を起動
  *   - ←→↑↓ で選択、PageUp/PageDown・マウスホイール・横スワイプでページ切替
  *   - アイコンをドラッグして並べ替え (画面の左右端でページ送り)
- *   - 右クリック: 開く / 管理者として実行 / ファイルの場所 / 削除 / 追加 / 並べ替え
+ *   - 右クリック: 開く / 管理者として実行 / ファイルの場所 / 名前を変更 / 削除 / 作成 / 追加 / 並べ替え / アプリ設定
  *   - Esc・何もない所をクリック・F11・他のウィンドウをアクティブにすると閉じる
  *   - 設定は exe と同じフォルダの launcher.txt (UTF-8)
  *       @hotkey=122   ホットキーの仮想キーコード (122=F11, 118=F7 など)
@@ -46,6 +51,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
+
+void Launcher_SetEnabled(BOOL on);
+void Launcher_SetStyle(int style, int edge);
+
+/* setting.c */
+void Settings_Open(void);
+void Settings_OpenPage(int page);
+BOOL Settings_LauncherEnabled(void);
+int Settings_LauncherStyle(void);
+int Settings_LauncherEdge(void);
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
@@ -87,6 +102,8 @@ static int g_count, g_nextId = 1;
 static int g_view[MAX_ITEMS], g_vn; /* 検索で絞り込んだ表示順 (g_items のインデックス) */
 
 static HWND g_hwnd;
+static BOOL g_lnOn, g_hotReg;   /* ランチャーが有効か / ホットキー登録済みか */
+static int g_lnStyle, g_lnEdge; /* 表示方法 0:通常(F11でフェード) 1:画面端に隠す(クリックでスライド) / 端 0:左 1:右 2:上 3:下 */
 static HDC g_memdc;
 static HBITMAP g_dib, g_oldBmp;
 static uint32_t *g_bits;
@@ -939,6 +956,35 @@ static void Render(void)
     POINT dst = {g_mx0, g_my0}, src = {0, 0};
     SIZE sz = {g_W, g_H};
     BYTE ca = (BYTE)(Clamp01(g_fade) * 255.0f + 0.5f);
+    if (g_lnStyle == 1)
+    { /* 画面端からスライド: 見えている幅/高さだけウィンドウにして、モニター外へはみ出さない */
+        float p = Clamp01(g_fade);
+        int vw = (int)(g_W * p), vh = (int)(g_H * p);
+        if (vw < 1)
+            vw = 1;
+        if (vh < 1)
+            vh = 1;
+        switch (g_lnEdge)
+        {
+        case 0: /* 左から: パネルの右側から見えてくる */
+            sz.cx = vw;
+            src.x = g_W - vw;
+            break;
+        case 1: /* 右から */
+            sz.cx = vw;
+            dst.x = g_mx0 + g_W - vw;
+            break;
+        case 2: /* 上から */
+            sz.cy = vh;
+            src.y = g_H - vh;
+            break;
+        default: /* 下から */
+            sz.cy = vh;
+            dst.y = g_my0 + g_H - vh;
+            break;
+        }
+        ca = 255;
+    }
     BLENDFUNCTION bf = {AC_SRC_OVER, 0, ca, AC_SRC_ALPHA};
     UpdateLayeredWindow(g_hwnd, NULL, &dst, &sz, g_memdc, &src, 0, &bf, ULW_ALPHA);
 }
@@ -984,6 +1030,172 @@ static void EnsureTimer(void)
         SetTimer(g_hwnd, TIMER_ANIM, 16, NULL);
         g_animOn = TRUE;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* 画面端のタブ (「隠す」スタイル): 端に少しだけ表示し、クリックでスライド表示       */
+/* ------------------------------------------------------------------ */
+static void ToggleLauncher(void);
+
+static HWND g_tab;
+static HDC g_tabDC;
+static HBITMAP g_tabBmp, g_tabOld;
+static uint32_t *g_tabBits;
+static int g_tabW, g_tabH, g_tabX, g_tabY;
+static BOOL g_tabHover, g_tabTrack;
+
+static float TabCov(float x, float y, float L, float T, float R, float B, float rad)
+{
+    float cx = (L + R) * 0.5f, cy = (T + B) * 0.5f, hw = (R - L) * 0.5f, hh = (B - T) * 0.5f;
+    float qx = fabsf(x - cx) - hw + rad, qy = fabsf(y - cy) - hh + rad;
+    float ox = fmaxf(qx, 0), oy = fmaxf(qy, 0);
+    float d = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0) - rad;
+    return Clamp01(0.5f - d);
+}
+
+static void TabDraw(void)
+{
+    if (!g_tab || !g_tabBits)
+        return;
+    float t = (g_tabHover ? 14.0f : 8.0f) * g_dpi; /* 画面端に見えている厚み (ホバーで太く) */
+    float a = g_tabHover ? 0.92f : 0.55f;
+    for (int y = 0; y < g_tabH; y++)
+        for (int x = 0; x < g_tabW; x++)
+        {
+            float L = 0, T = 0, R = (float)g_tabW, B = (float)g_tabH;
+            switch (g_lnEdge)
+            { /* 画面端の側は枠の外へはみ出させて、端に接した形にする */
+            case 0:
+                L = -t;
+                R = t;
+                break;
+            case 1:
+                L = g_tabW - t;
+                R = g_tabW + t;
+                break;
+            case 2:
+                T = -t;
+                B = t;
+                break;
+            default:
+                T = g_tabH - t;
+                B = g_tabH + t;
+                break;
+            }
+            float cv = TabCov(x + 0.5f, y + 0.5f, L, T, R, B, t) * a;
+            g_tabBits[y * g_tabW + x] = ((uint32_t)(cv * 255.0f + 0.5f) << 24) | ((uint32_t)(235.0f * cv + 0.5f) << 16) |
+                                        ((uint32_t)(235.0f * cv + 0.5f) << 8) | (uint32_t)(245.0f * cv + 0.5f);
+        }
+    POINT dst = {g_tabX, g_tabY}, src = {0, 0};
+    SIZE sz = {g_tabW, g_tabH};
+    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(g_tab, NULL, &dst, &sz, g_tabDC, &src, 0, &bf, ULW_ALPHA);
+}
+
+/* タブを出す/隠す・位置を合わせる (ランチャーが開いている間は隠す) */
+static void UpdateTab(void)
+{
+    if (!g_tab)
+        return;
+    if (!(g_hwnd && g_lnOn && g_lnStyle == 1 && !g_visible))
+    {
+        ShowWindow(g_tab, SW_HIDE);
+        return;
+    }
+    POINT o = {0, 0};
+    MONITORINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromPoint(o, MONITOR_DEFAULTTOPRIMARY), &mi);
+    int thick = (int)(14.0f * g_dpi) + 1, len = (int)(160.0f * g_dpi);
+    BOOL vertical = g_lnEdge < 2;
+    int w = vertical ? thick : len, h = vertical ? len : thick;
+    int mw = mi.rcMonitor.right - mi.rcMonitor.left, mh = mi.rcMonitor.bottom - mi.rcMonitor.top;
+    switch (g_lnEdge)
+    {
+    case 0:
+        g_tabX = mi.rcMonitor.left;
+        g_tabY = mi.rcMonitor.top + (mh - h) / 2;
+        break;
+    case 1:
+        g_tabX = mi.rcMonitor.right - w;
+        g_tabY = mi.rcMonitor.top + (mh - h) / 2;
+        break;
+    case 2:
+        g_tabX = mi.rcMonitor.left + (mw - w) / 2;
+        g_tabY = mi.rcMonitor.top;
+        break;
+    default:
+        g_tabX = mi.rcMonitor.left + (mw - w) / 2;
+        g_tabY = mi.rcMonitor.bottom - h;
+        break;
+    }
+    if (!g_tabBits || w != g_tabW || h != g_tabH)
+    {
+        if (g_tabBmp)
+        {
+            SelectObject(g_tabDC, g_tabOld);
+            DeleteObject(g_tabBmp);
+            g_tabBmp = NULL;
+            g_tabBits = NULL;
+        }
+        if (!g_tabDC)
+            g_tabDC = CreateCompatibleDC(NULL);
+        BITMAPINFO bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -h;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        g_tabBmp = CreateDIBSection(g_tabDC, &bi, DIB_RGB_COLORS, (void **)&g_tabBits, NULL, 0);
+        if (!g_tabBmp)
+            return;
+        g_tabOld = (HBITMAP)SelectObject(g_tabDC, g_tabBmp);
+        g_tabW = w;
+        g_tabH = h;
+    }
+    g_tabHover = FALSE;
+    TabDraw();
+    SetWindowPos(g_tab, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+static LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m)
+    {
+    case WM_MOUSEMOVE:
+        if (!g_tabHover)
+        {
+            g_tabHover = TRUE;
+            if (!g_tabTrack)
+            {
+                TRACKMOUSEEVENT te;
+                memset(&te, 0, sizeof(te));
+                te.cbSize = sizeof(te);
+                te.dwFlags = TME_LEAVE;
+                te.hwndTrack = h;
+                TrackMouseEvent(&te);
+                g_tabTrack = TRUE;
+            }
+            TabDraw();
+        }
+        return 0;
+    case WM_MOUSELEAVE:
+        g_tabHover = FALSE;
+        g_tabTrack = FALSE;
+        TabDraw();
+        return 0;
+    case WM_LBUTTONUP:
+        ToggleLauncher(); /* クリックでスライド表示 */
+        return 0;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_ERASEBKGND:
+        return 1;
+    }
+    return DefWindowProcW(h, m, w, l);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1047,8 +1259,10 @@ static void ShowLauncher(void)
     g_fadeTarget = 1.0f;
     g_visible = TRUE;
     g_showTick = GetTickCount();
-    Render();
-    SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE); /* まだ表示しない */
+    Render();                                                       /* 位置・大きさはここで確定 (スライドの開始位置) */
+    SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    UpdateTab(); /* 開いている間はタブを隠す */
     ForceForeground(g_hwnd);
     SetFocus(g_hwnd);
     StartIconLoad();
@@ -1083,7 +1297,7 @@ static BOOL Step(void)
         g_fade = g_fadeTarget;
     else
     {
-        g_fade += fd * 0.35f + (fd > 0 ? 0.02f : -0.02f);
+        g_fade += fd * (g_lnStyle == 1 ? 0.26f : 0.35f) + (fd > 0 ? 0.02f : -0.02f);
         busy = TRUE;
     }
     if (g_fadeTarget <= 0.0f && g_fade <= 0.0f)
@@ -1091,6 +1305,7 @@ static BOOL Step(void)
         g_visible = FALSE;
         g_launchId = -1;
         ShowWindow(g_hwnd, SW_HIDE);
+        UpdateTab(); /* 閉じたらタブを端に戻す */
         return FALSE;
     }
 
@@ -1522,6 +1737,8 @@ static void ShowContextMenu(HWND hwnd, int vi)
     AppendMenuW(menu, MF_STRING, 12, L"既存のフォルダを追加…");
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING | (g_search[0] ? MF_GRAYED : 0), 15, L"名前順に並べ替え");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 30, L"アプリ設定…");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -1582,6 +1799,11 @@ static void ShowContextMenu(HWND hwnd, int vi)
         qsort(g_items, g_count, sizeof(Item), CmpItemName);
         AfterListChanged();
         break;
+    case 30:
+        g_modal = FALSE;
+        HideLauncher();
+        Settings_OpenPage(2);
+        return;
     default:
         break;
     }
@@ -1932,22 +2154,129 @@ void Launcher_Init(HINSTANCE hInst)
 
     g_hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, wc.lpszClassName, L"PromLauncher",
                              WS_POPUP, 0, 0, 100, 100, NULL, NULL, hInst, NULL);
-    RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_NOREPEAT, (UINT)g_hotkey); /* 失敗しても(他アプリが使用中)メニューから開ける */
+    WNDCLASSEXW tc;
+    memset(&tc, 0, sizeof(tc));
+    tc.cbSize = sizeof(tc);
+    tc.lpfnWndProc = TabProc;
+    tc.hInstance = hInst;
+    tc.hCursor = LoadCursor(NULL, IDC_HAND);
+    tc.lpszClassName = L"PromLauncherTab";
+    RegisterClassExW(&tc);
+    g_tab = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE, tc.lpszClassName,
+                            L"PromLauncherTab", WS_POPUP, 0, 0, 10, 10, NULL, NULL, hInst, NULL);
+
+    g_lnStyle = Settings_LauncherStyle();
+    g_lnEdge = Settings_LauncherEdge();
+    Launcher_SetEnabled(Settings_LauncherEnabled()); /* 設定に従ってホットキー/タブを用意 */
 
     CalcGeom();
     RebuildView();
     StartIconLoad(); /* 起動直後からアイコンを先読み */
 }
 
+/* 設定でランチャーを有効/無効にする (ホットキーの登録・解除) */
+/* 表示方法の変更 (style 0:通常 1:画面端に隠す / edge 0:左 1:右 2:上 3:下) */
+void Launcher_SetStyle(int style, int edge)
+{
+    g_lnStyle = style ? 1 : 0;
+    g_lnEdge = ClampI(edge, 0, 3);
+    UpdateTab();
+}
+
+void Launcher_SetEnabled(BOOL on)
+{
+    g_lnOn = on;
+    if (!g_hwnd)
+        return;
+    UpdateTab();
+    if (on && !g_hotReg)
+        g_hotReg = RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_NOREPEAT, (UINT)g_hotkey); /* 失敗(他アプリが使用中)でもメニューから開ける */
+    else if (!on)
+    {
+        if (g_hotReg)
+            UnregisterHotKey(g_hwnd, HOTKEY_ID);
+        g_hotReg = FALSE;
+        if (g_visible)
+            HideLauncher();
+        UpdateTab();
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* 設定(setting.c)から使うランチャーの設定 (初回設定中=ウィンドウ作成前でも安全) */
+/* ------------------------------------------------------------------ */
+int Launcher_GetHotkey(void) { return g_hotkey; }
+int Launcher_GetCols(void) { return g_cfgCols; }
+int Launcher_GetRows(void) { return g_cfgRows; }
+
+/* ショートカットキーを変更する。他のアプリが使用中などで登録できなければ元のキーに戻して FALSE */
+BOOL Launcher_SetHotkey(int vk)
+{
+    vk = ClampI(vk, 1, 255);
+    if (!g_hwnd)
+    {
+        g_hotkey = vk;
+        return TRUE;
+    }
+    int old = g_hotkey;
+    if (g_hotReg)
+        UnregisterHotKey(g_hwnd, HOTKEY_ID);
+    g_hotReg = FALSE;
+    BOOL ok = TRUE;
+    g_hotkey = vk;
+    if (g_lnOn)
+    {
+        g_hotReg = RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_NOREPEAT, (UINT)g_hotkey);
+        if (!g_hotReg)
+        {
+            ok = FALSE;
+            g_hotkey = old;
+            g_hotReg = RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_NOREPEAT, (UINT)g_hotkey);
+        }
+    }
+    if (ok)
+        SaveConfig();
+    return ok;
+}
+
+/* 列数・行数 (0=自動) */
+void Launcher_SetGrid(int cols, int rows)
+{
+    g_cfgCols = ClampI(cols, 0, 20);
+    g_cfgRows = ClampI(rows, 0, 20);
+    if (!g_hwnd)
+        return;
+    SaveConfig();
+    CalcGeom();
+    RebuildView();
+    g_dirty = TRUE;
+}
+
 void Launcher_Toggle(void)
 {
-    if (g_hwnd)
+    if (g_hwnd && g_lnOn)
         ToggleLauncher();
 }
 
 void Launcher_Shutdown(void)
 {
     g_quit = 1;
+    if (g_tab)
+    {
+        DestroyWindow(g_tab);
+        g_tab = NULL;
+    }
+    if (g_tabBmp)
+    {
+        SelectObject(g_tabDC, g_tabOld);
+        DeleteObject(g_tabBmp);
+        g_tabBmp = NULL;
+    }
+    if (g_tabDC)
+    {
+        DeleteDC(g_tabDC);
+        g_tabDC = NULL;
+    }
     if (g_hwnd)
     {
         DestroyWindow(g_hwnd);

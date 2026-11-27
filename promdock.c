@@ -20,7 +20,12 @@
  *       設定: 向き(横/縦) / 位置(下・上・左・右) / 自動的に隠す / 隠れるまでの時間
  *   - Ctrl+ドラッグでドックを自由に移動 (一番近い画面の端に吸着)
  *   - 設定は exe と同じフォルダの promdock.txt (UTF-8) に保存
+ *       @autohide @edge @frac @hidems のほか、アプリ設定(setting.c)から変更できる
+ *       @iconsize=48 (アイコンサイズ px) / @zoom=150 (ホバー時の拡大率 %) / @opacity=78 (背景の濃さ %)
  *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
+ *   - デスクトップに置ける検索バー (searchbar.c / 同じexeにビルド。ブラウザと検索エンジンを選んで追加)
+ *   - 初回起動時はアプリ設定(setting.c)が開き、ドック/ランチャーを有効にするか選べる
+ *     アプリ設定は「全般 / ドック / ランチャー / 検索バー」のページに分かれており、各機能の細かい設定もそこで変更できる
  */
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
@@ -46,6 +51,17 @@
 void Launcher_Init(HINSTANCE hInst);
 void Launcher_Toggle(void);
 void Launcher_Shutdown(void);
+/* searchbar.c (デスクトップに置ける検索バー) */
+void SearchBar_Init(HINSTANCE hInst);
+void SearchBar_Shutdown(void);
+/* setting.c (アプリ設定: ドック/ランチャーの有効・無効) */
+BOOL Settings_Init(HINSTANCE hInst);
+void Settings_Open(void);
+void Settings_OpenPage(int page); /* 0:全般 1:ドック 2:ランチャー 3:検索バー */
+BOOL Settings_DockEnabled(void);
+BOOL Settings_LauncherEnabled(void);
+BOOL Settings_PreTranslate(MSG *m);
+void Settings_Shutdown(void);
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
@@ -61,8 +77,8 @@ void Launcher_Shutdown(void);
 #endif
 
 /* ---- 調整用パラメータ (96DPI基準のピクセル) ---- */
-#define BASE_SIZE 48.0f
-#define MAX_SCALE 1.5f /* 拡大の最大倍率 (控えめ) */
+#define BASE_SIZE_DEF 48.0f /* アイコンの標準サイズ (設定で変更可) */
+#define MAX_SCALE_DEF 1.5f  /* 拡大の最大倍率 (設定で変更可) */
 #define ICON_GAP 8.0f
 #define BAR_PAD_X 14.0f
 #define BAR_PAD_Y 12.0f
@@ -108,7 +124,8 @@ typedef struct
     int br, bg, bb;
     float ba;
 } Style;
-static const Style g_barStyle = {36, 36, 40, 0.78f, 0, 0, 0, 0.0f}; /* ダークグレー半透明(濃いめ)・枠線なし */
+static Style g_barStyle = {36, 36, 40, 0.78f, 0, 0, 0, 0.0f};        /* ダークグレー半透明(濃いめ)・枠線なし。fa は設定で変更可 */
+static float g_baseSize = BASE_SIZE_DEF, g_maxScale = MAX_SCALE_DEF; /* 設定(setting.c)から変更できる */
 static const Style g_labelStyle = {26, 26, 30, 0.92f, 0, 0, 0, 0.0f};
 
 static const int g_mipSize[MIP_LEVELS] = {256, 128, 64};
@@ -655,6 +672,7 @@ static void SaveConfig(void)
     if (!f)
         return;
     fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
+    fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
     for (int i = 0; i < g_count; i++)
     {
         if (!g_items[i].pinned)
@@ -706,6 +724,12 @@ static void LoadConfig(void)
                 g_frac = ClampI(atoi(p + 6), 0, 1000) / 1000.0f;
             else if (strncmp(p, "@hidems=", 8) == 0)
                 g_hideMs = ClampI(atoi(p + 8), 0, 60000);
+            else if (strncmp(p, "@iconsize=", 10) == 0)
+                g_baseSize = (float)ClampI(atoi(p + 10), 32, 96);
+            else if (strncmp(p, "@zoom=", 6) == 0)
+                g_maxScale = ClampI(atoi(p + 6), 100, 200) / 100.0f;
+            else if (strncmp(p, "@opacity=", 9) == 0)
+                g_barStyle.fa = ClampI(atoi(p + 9), 30, 100) / 100.0f;
         }
         else if (*p && *p != '#')
         {
@@ -882,25 +906,25 @@ static void ResizeDock(void)
     float len = (float)(vert ? (wa.bottom - wa.top) : (wa.right - wa.left));
     float limit = len * 0.92f;
     float sep = SepW();
-    g_base = BASE_SIZE * d;
+    g_base = g_baseSize * d;
     for (;;)
     { /* 画面に収まるまでアイコンを縮める */
         float restW = n * g_base + (n - 1) * g_gap + 2 * g_padx + sep;
-        float extra = (n < 6 ? n : 6) * g_base * (MAX_SCALE - 1.0f);
+        float extra = (n < 6 ? n : 6) * g_base * (g_maxScale - 1.0f);
         g_LW = (int)(restW + extra + (g_base + g_gap) + 4 * g_margin);
         if (g_LW <= limit || g_base <= 20 * d)
             break;
         g_base -= 1.0f;
     }
     float labelExt = vert ? LABEL_W_VERT * d : LABEL_H * d;
-    g_LH = (int)(g_margin + g_pady + MAX_SCALE * g_base + g_bounce + labelExt + 4);
+    g_LH = (int)(g_margin + g_pady + g_maxScale * g_base + g_bounce + labelExt + 4);
     g_W = vert ? g_LH : g_LW;
     g_H = vert ? g_LW : g_LH;
 
     g_barV0 = g_margin;
     g_barV1 = g_margin + g_base + 2 * g_pady;
     g_baseline = g_margin + g_pady;
-    g_hoverV = g_baseline + MAX_SCALE * g_base + 6 * d;
+    g_hoverV = g_baseline + g_maxScale * g_base + 6 * d;
     g_hideDelta = g_barV1 - 4 * d; /* 隠れた時はバーの端4pxだけ見せる */
 
     float start = (float)(vert ? wa.top : wa.left);
@@ -1013,7 +1037,7 @@ static BOOL Step(void)
         {
             /* マウス直下を最大に、距離に応じてガウス状に周辺も拡大 */
             float dx = g_mouseU - (off + c[i]);
-            target = 1.0f + (MAX_SCALE - 1.0f) * expf(-(dx * dx) / (2 * sigma * sigma));
+            target = 1.0f + (g_maxScale - 1.0f) * expf(-(dx * dx) / (2 * sigma * sigma));
         }
         float diff = target - it->scale;
         if (fabsf(diff) < 0.003f)
@@ -1522,7 +1546,8 @@ static void ShowContextMenu(HWND hwnd, int hit)
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_STRING | (g_autohide ? MF_CHECKED : 0), 6, L"自動的に隠す");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mt, L"隠れるまでの時間");
-    AppendMenuW(menu, MF_STRING, 30, L"ランチャーを開く (F11)");
+    AppendMenuW(menu, MF_STRING | (Settings_LauncherEnabled() ? 0 : MF_GRAYED), 30, L"ランチャーを開く (F11)");
+    AppendMenuW(menu, MF_STRING, 31, L"アプリ設定…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)set, L"設定");
     AppendMenuW(menu, MF_STRING, 2, L"ドックを終了");
 
@@ -1580,6 +1605,9 @@ static void ShowContextMenu(HWND hwnd, int hit)
         break;
     case 30:
         Launcher_Toggle();
+        break;
+    case 31:
+        Settings_OpenPage(1);
         break;
     case 6:
         g_autohide = !g_autohide;
@@ -2140,6 +2168,101 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+/* 設定(setting.c)からドックの有効/無効を切り替える。無効の間は隠して監視も止める */
+void Dock_SetEnabled(BOOL on)
+{
+    if (!g_hwnd)
+        return;
+    if (on)
+    {
+        RefreshRunning();
+        ResizeDock();
+        Render();
+        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+        SetTimer(g_hwnd, TIMER_POLL, POLL_MS, NULL);
+        if (g_autohide)
+            EnsureTimer();
+    }
+    else
+    {
+        KillTimer(g_hwnd, TIMER_POLL);
+        ShowWindow(g_hwnd, SW_HIDE);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* 設定(setting.c)から使うドックの設定。値は即座に反映され、                    */
+/* 確定したら Dock_SaveSettings() で promdock.txt に保存する。                */
+/* 初回設定中 (ウィンドウ作成前) に呼ばれても安全 (変数を書き換えるだけ)。      */
+/* ------------------------------------------------------------------ */
+static void DockRelayout(void)
+{
+    if (!g_hwnd)
+        return;
+    g_slide = 0.0f;
+    ResizeDock();
+    Render();
+}
+
+void Dock_SaveSettings(void)
+{
+    if (g_hwnd && g_cfgPath[0])
+        SaveConfig();
+}
+
+int Dock_GetEdge(void) { return g_edge; }
+void Dock_SetEdge(int e)
+{
+    g_edge = ClampI(e, 0, 3);
+    DockRelayout();
+}
+
+void Dock_ResetPosition(void)
+{
+    g_frac = 0.5f;
+    DockRelayout();
+}
+
+BOOL Dock_GetAutoHide(void) { return g_autohide; }
+void Dock_SetAutoHide(BOOL on)
+{
+    g_autohide = on ? TRUE : FALSE;
+    if (g_hwnd && IsWindowVisible(g_hwnd))
+        EnsureTimer();
+}
+
+int Dock_GetHideMs(void) { return g_hideMs; }
+void Dock_SetHideMs(int ms) { g_hideMs = ClampI(ms, 0, 60000); }
+
+int Dock_GetIconSize(void) { return (int)(g_baseSize + 0.5f); }
+void Dock_SetIconSize(int px)
+{
+    g_baseSize = (float)ClampI(px, 32, 96);
+    DockRelayout();
+}
+
+int Dock_GetZoom(void) { return (int)(g_maxScale * 100.0f + 0.5f); }
+void Dock_SetZoom(int pct)
+{
+    g_maxScale = ClampI(pct, 100, 200) / 100.0f;
+    DockRelayout();
+}
+
+int Dock_GetOpacity(void) { return (int)(g_barStyle.fa * 100.0f + 0.5f); }
+void Dock_SetOpacity(int pct)
+{
+    g_barStyle.fa = ClampI(pct, 30, 100) / 100.0f;
+    if (g_hwnd)
+        Render();
+}
+
+/* タスクトレイ/設定ウィンドウからの終了用 */
+void Dock_Quit(void)
+{
+    if (g_hwnd)
+        DestroyWindow(g_hwnd);
+}
+
 /* ------------------------------------------------------------------ */
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 {
@@ -2153,6 +2276,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     HDC scr = GetDC(NULL);
     g_dpi = GetDeviceCaps(scr, LOGPIXELSX) / 96.0f;
     ReleaseDC(NULL, scr);
+
+    /* 初回はここで設定ウィンドウが開き、ドック/ランチャーを有効にするか選ぶ。
+       FALSE: 二重起動 (動作中のアプリの設定を開いた) か、初回設定で終了が選ばれた */
+    if (!Settings_Init(hInst))
+    {
+        OleUninitialize();
+        return 0;
+    }
 
     GetModuleFileNameW(NULL, g_cfgPath, MAX_PATH);
     wchar_t *slash = wcsrchr(g_cfgPath, L'\\');
@@ -2184,27 +2315,31 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 
     RegisterDragDrop(g_hwnd, &g_dropTarget);
     Launcher_Init(hInst);
+    SearchBar_Init(hInst);
     g_leaveTick = GetTickCount();
     LoadConfig();
     RefreshRunning();
     ResizeDock();
     Render();
-    ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
-    SetTimer(g_hwnd, TIMER_POLL, POLL_MS, NULL);
+    Dock_SetEnabled(Settings_DockEnabled()); /* 表示 + 実行中アプリの監視タイマー開始 (無効なら隠す) */
     if (g_autohide)
         EnsureTimer();
 
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0)
     {
+        if (Settings_PreTranslate(&m))
+            continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
 
+    Settings_Shutdown();
     for (int i = 0; i < g_count; i++)
         FreeItem(&g_items[i]);
     free(g_lblMask);
     DestroyGhost();
+    SearchBar_Shutdown();
     Launcher_Shutdown();
     OleUninitialize();
     return 0;

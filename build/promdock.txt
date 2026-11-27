@@ -1,4 +1,0 @@
-@autohide=1
-@edge=0
-@frac=500
-@hidems=600

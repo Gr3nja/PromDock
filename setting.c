@@ -1,0 +1,2117 @@
+/*
+ * setting.c - PromDock のアプリ設定 (promdock.c / launcher.c / searchbar.c と同じ exe にビルド)
+ *
+ *   左のサイドバーで「全般 / ドック / ランチャー / 検索バー」を切り替えるモダンな設定画面。
+ *   部品 (トグル・セグメント・スライダー・ステッパー・ドロップダウン・ボタン) はすべて自前で描画します。
+ *   配色は Windows のライト/ダークに自動で合わせます (全般 > テーマ で固定も可能)。
+ *
+ *   - 初回起動時: 最初に設定ウィンドウを開き、使う機能を選んで「開始」を押すと起動する
+ *   - 2回目以降: タスクトレイのアイコン / ドック・ランチャー・検索バーの右クリックから開く
+ *       (どの機能から開いたかで、その機能のページが最初に表示される)
+ *   - 動作中に PromDock.exe をもう一度起動すると、動作中のアプリの設定ウィンドウが開く
+ *   - 初回以降の変更は「すぐに反映・保存」されます (OK ボタンは不要)
+ *
+ *   項目ごとの設定
+ *     全般      : ドック/ランチャーの有効・無効 / テーマ / Windows 起動時に自動実行 / フォルダを開く / アプリ終了
+ *     ドック    : 表示位置 (下・上・左・右) / 位置のリセット / 自動的に隠す + 時間 /
+ *                 アイコンサイズ / ホバー時の拡大率 / 背景の濃さ            (保存先: promdock.txt)
+ *     ランチャー: ショートカットキー / 表示スタイル (通常・画面端に隠す) と端 / 列数・行数 (保存先: launcher.txt)
+ *     検索バー  : ブラウザと検索エンジンを選んで追加・削除 / 位置の移動        (保存先: searchbar.ini)
+ *
+ *   - アプリ全体の設定は exe と同じフォルダの settings.ini に保存
+ *       [PromDock]
+ *       dock=1
+ *       launcher=1
+ *       launcher_style=0   (0:通常 / 1:画面の端に隠しておき、クリックでスライド表示)
+ *       launcher_edge=0    (隠すとき: 0:左 1:右 2:上 3:下)
+ *       theme=0            (0:自動 1:ライト 2:ダーク)
+ *
+ * 外部から呼ぶ関数:
+ *     Settings_Init(hInst)        ... 起動直後に1回。FALSE が返ったらそのまま終了すること
+ *     Settings_DockEnabled()      ... ドックが有効か
+ *     Settings_LauncherEnabled()  ... ランチャーが有効か
+ *     Settings_Open()             ... 設定ウィンドウを開く (最後に見ていたページ)
+ *     Settings_OpenPage(page)     ... 指定ページで開く (0:全般 1:ドック 2:ランチャー 3:検索バー)
+ *     Settings_PreTranslate(msg)  ... メッセージループで TranslateMessage の前に呼ぶ
+ *     Settings_RefreshSearchBar() ... 検索バーの一覧・ボタン表示を更新 (searchbar.c から呼ばれる)
+ *     Settings_Shutdown()         ... 終了時に1回
+ */
+#define _CRT_SECURE_NO_WARNINGS
+#define UNICODE
+#define _UNICODE
+#define WIN32_LEAN_AND_MEAN
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#include <windows.h>
+#include <windowsx.h>
+#include <shellapi.h>
+#include <dwmapi.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "dwmapi.lib")
+#endif
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+/* ---- 他のモジュールの関数 ---- */
+/* promdock.c */
+void Dock_SetEnabled(BOOL on);
+void Dock_Quit(void);
+void Dock_SaveSettings(void);
+int Dock_GetEdge(void);
+void Dock_SetEdge(int e);
+void Dock_ResetPosition(void);
+BOOL Dock_GetAutoHide(void);
+void Dock_SetAutoHide(BOOL on);
+int Dock_GetHideMs(void);
+void Dock_SetHideMs(int ms);
+int Dock_GetIconSize(void);
+void Dock_SetIconSize(int px);
+int Dock_GetZoom(void);
+void Dock_SetZoom(int pct);
+int Dock_GetOpacity(void);
+void Dock_SetOpacity(int pct);
+/* launcher.c */
+void Launcher_SetEnabled(BOOL on);
+void Launcher_SetStyle(int style, int edge);
+void Launcher_Toggle(void);
+int Launcher_GetHotkey(void);
+BOOL Launcher_SetHotkey(int vk);
+int Launcher_GetCols(void);
+int Launcher_GetRows(void);
+void Launcher_SetGrid(int cols, int rows);
+/* searchbar.c (デスクトップ検索バー) */
+int SearchBar_BrowserCount(void);
+void SearchBar_BrowserLabel(int i, wchar_t *out, int cch);
+int SearchBar_EngineCount(void);
+const wchar_t *SearchBar_EngineName(int i);
+int SearchBar_Count(void);
+void SearchBar_Describe(int i, wchar_t *out, int cch);
+BOOL SearchBar_Add(int browser, int engine);
+void SearchBar_Remove(int index);
+BOOL SearchBar_MoveMode(void);
+void SearchBar_SetMoveMode(BOOL on);
+
+/* このファイルが公開する関数 */
+BOOL Settings_Init(HINSTANCE hInst);
+void Settings_Open(void);
+void Settings_OpenPage(int page);
+BOOL Settings_DockEnabled(void);
+BOOL Settings_LauncherEnabled(void);
+int Settings_LauncherStyle(void);
+int Settings_LauncherEdge(void);
+BOOL Settings_PreTranslate(MSG *m);
+void Settings_Shutdown(void);
+void Settings_RefreshSearchBar(void);
+
+#define WM_TRAY (WM_APP + 10)
+#define WM_SHOWSETTINGS (WM_APP + 11)
+
+#define TIMER_ANIM 1
+#define TIMER_NOTICE 2
+#define SB_LIMIT 8 /* searchbar.c の SB_MAX と同じ */
+
+/* ---- レイアウト (96DPI 基準の論理ピクセル) ---- */
+#define WIN_W 880
+#define WIN_H 640
+#define SIDE_W 224
+#define HEAD_H 104
+#define FOOT_H 68
+#define CX (SIDE_W + 36)
+#define CW (WIN_W - SIDE_W - 72)
+#define RH 64
+
+/* ---- 部品の ID (アニメーション配列の添字にもなるので 64 未満) ---- */
+enum
+{
+    W_NONE = 0,
+    W_NAV,
+    W_GOTO,
+    W_TG_DOCK,
+    W_TG_LN,
+    W_TG_AUTOSTART,
+    W_TG_AUTOHIDE,
+    W_SEG_THEME,
+    W_SEG_EDGE,
+    W_SEG_LNSTYLE,
+    W_SEG_LNEDGE,
+    W_SL_HIDEMS,
+    W_SL_ICON,
+    W_SL_ZOOM,
+    W_SL_OPACITY,
+    W_STP_COLS,
+    W_STP_ROWS,
+    W_DD_HOTKEY,
+    W_DD_BROWSER,
+    W_DD_ENGINE,
+    W_BTN_RESETPOS,
+    W_BTN_OPENDIR,
+    W_BTN_QUIT,
+    W_BTN_ADD,
+    W_BTN_MOVE,
+    W_BTN_DEL,
+    W_BTN_OK,
+    W_BTN_EXIT,
+    W_COUNT
+};
+
+enum
+{
+    PAGE_GENERAL = 0,
+    PAGE_DOCK,
+    PAGE_LAUNCHER,
+    PAGE_SEARCH,
+    PAGE_COUNT
+};
+
+typedef struct
+{
+    uint32_t bg, side, card, border, text, sub, accent, field, fieldHover, track, sep, danger, knob;
+} Pal;
+
+static const Pal PAL_LIGHT = {0xF3F4F7, 0xE9ECF1, 0xFFFFFF, 0xDFE3EA, 0x1B1D22, 0x6A707C, 0x3B6CF0,
+                              0xF0F2F6, 0xE4E8EF, 0xCDD3DE, 0xECEEF3, 0xD13438, 0xFFFFFF};
+static const Pal PAL_DARK = {0x1C1D21, 0x16171A, 0x27282D, 0x373940, 0xF2F3F5, 0x9CA1AD, 0x5B8CFF,
+                             0x33353C, 0x3E414A, 0x4A4E59, 0x31333A, 0xFF7B7B, 0xFFFFFF};
+
+typedef struct
+{
+    RECT r;       /* 画面上の矩形 (デバイスpx) */
+    int id, arg;  /* 部品 ID と引数 (セグメント番号・ボタンの対象など) */
+    BOOL en;      /* 有効か */
+    BOOL content; /* スクロール領域内の部品か */
+    int x0, x1;   /* スライダーのトラック左右 (デバイスpx) */
+} Hit;
+
+/* ---- 状態 ---- */
+static HINSTANCE g_hInst;
+static HWND g_host, g_set;
+static HFONT g_fBody, g_fSmall, g_fSec, g_fHead, g_fApp, g_fBtn;
+static HICON g_icon;
+static HICON g_iconSm; /* 小さいアイコン (タイトルバー・トレイ用)。g_icon は大きいアイコン (タスクバー等) */
+static HANDLE g_mutex;
+static UINT g_msgTaskbar;
+static BOOL g_dockOn = TRUE, g_lnOn = TRUE, g_first, g_accepted, g_trayAdded;
+static int g_lnStyle = 0, g_lnEdge = 0; /* ランチャー表示方法 0:通常 1:画面端に隠す / 端 0:左 1:右 2:上 3:下 */
+static int g_theme = 0;                 /* 0:自動 1:ライト 2:ダーク */
+static BOOL g_autoStart;
+static float g_dpi = 1.0f;
+static wchar_t g_ini[MAX_PATH];
+
+static const Pal *g_pal = &PAL_LIGHT;
+static BOOL g_dark;
+
+/* 描画バッファ */
+static HDC g_mem;
+static HBITMAP g_dib, g_oldBmp;
+static uint32_t *g_px;
+static int g_pw, g_ph;
+static RECT g_clip;
+static int g_oy; /* 描画時に y へ加える論理オフセット (スクロール) */
+
+/* UI の状態 */
+static int g_page = PAGE_GENERAL;
+static int g_scroll[PAGE_COUNT];
+static int g_contentH;
+static Hit g_hit[160];
+static int g_nhit;
+static int g_hoverId, g_hoverArg, g_pressId, g_pressArg, g_focusId, g_focusArg;
+static BOOL g_kbd, g_tracking, g_dragSlider;
+static int g_dragId;
+static int g_sbBrowser, g_sbEngine; /* 検索バー追加フォームの選択 */
+static wchar_t g_notice[160];
+static DWORD g_noticeTick;
+static BOOL g_noticeWarn;
+
+/* アニメーション (トグルのノブ) */
+static float g_av[W_COUNT + 8], g_at[W_COUNT + 8];
+static BOOL g_ainit[W_COUNT + 8];
+
+static int S(int v) { return (int)(v * g_dpi + 0.5f); }
+static float F(int v) { return v * g_dpi; }
+static float FY(int y) { return (y + g_oy) * g_dpi; }
+static int DY(int y) { return (int)((y + g_oy) * g_dpi + 0.5f); }
+static float Clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+static int ClampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+/* ------------------------------------------------------------------ */
+/* アプリのアイコン (3x3 のグリッド) をコードで生成                          */
+/* ------------------------------------------------------------------ */
+static float RRectCov(float x, float y, float L, float T, float R, float B, float rad)
+{
+    float cx = (L + R) * 0.5f, cy = (T + B) * 0.5f, hw = (R - L) * 0.5f, hh = (B - T) * 0.5f;
+    if (rad > hw)
+        rad = hw;
+    if (rad > hh)
+        rad = hh;
+    float qx = fabsf(x - cx) - hw + rad, qy = fabsf(y - cy) - hh + rad;
+    float ox = fmaxf(qx, 0), oy = fmaxf(qy, 0);
+    float d = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0) - rad;
+    float c = 0.5f - d;
+    return c < 0 ? 0 : (c > 1 ? 1 : c);
+}
+
+/* exe に埋め込んだ promdock.ico (リソースID 1) を読み込む。埋め込まれていなければ NULL */
+static HICON LoadAppIco(int px)
+{
+    return (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON, px, px, LR_DEFAULTCOLOR);
+}
+
+static HICON MakeAppIcon(void)
+{
+    const int N = 32;
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = N;
+    bi.bmiHeader.biHeight = -N;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HDC dc = GetDC(NULL);
+    HBITMAP color = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    ReleaseDC(NULL, dc);
+    HBITMAP mask = CreateBitmap(N, N, 1, 1, NULL);
+    if (!color || !mask || !bits)
+    {
+        if (color)
+            DeleteObject(color);
+        if (mask)
+            DeleteObject(mask);
+        return NULL;
+    }
+    uint32_t *px = (uint32_t *)bits;
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++)
+        {
+            float fx = x + 0.5f, fy = y + 0.5f;
+            float a = RRectCov(fx, fy, 1, 1, 31, 31, 8);
+            float t = fy / N;
+            float r = 70 - 30 * t, g = 120 - 50 * t, b = 235 - 45 * t; /* 上から下へ濃くなる青 */
+            float w = 0;                                               /* 白い 3x3 の角丸四角 */
+            for (int cy = 0; cy < 3; cy++)
+                for (int cx = 0; cx < 3; cx++)
+                {
+                    float L = 5.0f + cx * 8.5f, T = 5.0f + cy * 8.5f;
+                    float c = RRectCov(fx, fy, L, T, L + 6, T + 6, 1.8f);
+                    if (c > w)
+                        w = c;
+                }
+            r = r + (255 - r) * w;
+            g = g + (255 - g) * w;
+            b = b + (255 - b) * w;
+            px[y * N + x] = ((uint32_t)(a * 255) << 24) | ((uint32_t)(r * a) << 16) | ((uint32_t)(g * a) << 8) |
+                            (uint32_t)(b * a);
+        }
+    ICONINFO ii;
+    memset(&ii, 0, sizeof(ii));
+    ii.fIcon = TRUE;
+    ii.hbmMask = mask;
+    ii.hbmColor = color;
+    HICON h = CreateIconIndirect(&ii);
+    DeleteObject(color);
+    DeleteObject(mask);
+    return h;
+}
+
+/* ------------------------------------------------------------------ */
+/* 設定の読み書き・反映                                                   */
+/* ------------------------------------------------------------------ */
+static void LoadSettings(void)
+{
+    g_dockOn = GetPrivateProfileIntW(L"PromDock", L"dock", 1, g_ini) != 0;
+    g_lnOn = GetPrivateProfileIntW(L"PromDock", L"launcher", 1, g_ini) != 0;
+    g_lnStyle = GetPrivateProfileIntW(L"PromDock", L"launcher_style", 0, g_ini) ? 1 : 0;
+    g_lnEdge = ClampInt((int)GetPrivateProfileIntW(L"PromDock", L"launcher_edge", 0, g_ini), 0, 3);
+    g_theme = ClampInt((int)GetPrivateProfileIntW(L"PromDock", L"theme", 0, g_ini), 0, 2);
+    if (!g_dockOn && !g_lnOn)
+        g_dockOn = TRUE;
+}
+
+static void SaveSettings(void)
+{
+    wchar_t b[8];
+    WritePrivateProfileStringW(L"PromDock", L"dock", g_dockOn ? L"1" : L"0", g_ini);
+    WritePrivateProfileStringW(L"PromDock", L"launcher", g_lnOn ? L"1" : L"0", g_ini);
+    WritePrivateProfileStringW(L"PromDock", L"launcher_style", g_lnStyle ? L"1" : L"0", g_ini);
+    _snwprintf(b, 8, L"%d", g_lnEdge);
+    b[7] = 0;
+    WritePrivateProfileStringW(L"PromDock", L"launcher_edge", b, g_ini);
+    _snwprintf(b, 8, L"%d", g_theme);
+    b[7] = 0;
+    WritePrivateProfileStringW(L"PromDock", L"theme", b, g_ini);
+}
+
+/* 初回設定の「開始」: すべてを確定して反映する */
+static void ApplyAll(void)
+{
+    SaveSettings();
+    Dock_SetEnabled(g_dockOn); /* 起動前(初回設定中)は何もしない */
+    Launcher_SetStyle(g_lnStyle, g_lnEdge);
+    Launcher_SetEnabled(g_lnOn);
+    Dock_SaveSettings();
+}
+
+BOOL Settings_DockEnabled(void) { return g_dockOn; }
+BOOL Settings_LauncherEnabled(void) { return g_lnOn; }
+int Settings_LauncherStyle(void) { return g_lnStyle; }
+int Settings_LauncherEdge(void) { return g_lnEdge; }
+
+/* ---- Windows 起動時の自動実行 (HKCU\...\Run) ---- */
+#define RUNKEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+static BOOL AutoStartGet(void)
+{
+    HKEY k;
+    BOOL on = FALSE;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, KEY_READ, &k) == ERROR_SUCCESS)
+    {
+        DWORD type = 0, n = 0;
+        on = RegQueryValueExW(k, L"PromDock", NULL, &type, NULL, &n) == ERROR_SUCCESS;
+        RegCloseKey(k);
+    }
+    return on;
+}
+
+static void AutoStartSet(BOOL on)
+{
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, RUNKEY, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS)
+        return;
+    if (on)
+    {
+        wchar_t path[MAX_PATH], v[MAX_PATH + 4];
+        GetModuleFileNameW(NULL, path, MAX_PATH);
+        _snwprintf(v, MAX_PATH + 4, L"\"%s\"", path);
+        v[MAX_PATH + 3] = 0;
+        RegSetValueExW(k, L"PromDock", 0, REG_SZ, (const BYTE *)v, (DWORD)((wcslen(v) + 1) * sizeof(wchar_t)));
+    }
+    else
+        RegDeleteValueW(k, L"PromDock");
+    RegCloseKey(k);
+}
+
+/* ---- テーマ ---- */
+static BOOL SystemIsDark(void)
+{
+    HKEY k;
+    DWORD v = 1, n = sizeof(v), type = 0;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0,
+                      KEY_READ, &k) == ERROR_SUCCESS)
+    {
+        RegQueryValueExW(k, L"AppsUseLightTheme", NULL, &type, (BYTE *)&v, &n);
+        RegCloseKey(k);
+    }
+    return v == 0;
+}
+
+static void ApplyTheme(void)
+{
+    g_dark = g_theme == 2 ? TRUE : (g_theme == 1 ? FALSE : SystemIsDark());
+    g_pal = g_dark ? &PAL_DARK : &PAL_LIGHT;
+    if (g_set)
+    {
+        BOOL v = g_dark;
+        DwmSetWindowAttribute(g_set, DWMWA_USE_IMMERSIVE_DARK_MODE, &v, sizeof(v));
+        InvalidateRect(g_set, NULL, FALSE);
+    }
+}
+
+static void Notice(const wchar_t *s, BOOL warn)
+{
+    wcsncpy(g_notice, s, 159);
+    g_notice[159] = 0;
+    g_noticeTick = GetTickCount();
+    g_noticeWarn = warn;
+    if (g_set)
+    {
+        SetTimer(g_set, TIMER_NOTICE, 500, NULL);
+        InvalidateRect(g_set, NULL, FALSE);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* 描画プリミティブ (アンチエイリアス付きの角丸四角・円・線)                  */
+/* ------------------------------------------------------------------ */
+static uint32_t Mix(uint32_t a, uint32_t b, float t)
+{
+    t = Clampf(t, 0, 1);
+    int ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+    int br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    return ((uint32_t)(ar + (br - ar) * t + 0.5f) << 16) | ((uint32_t)(ag + (bg - ag) * t + 0.5f) << 8) |
+           (uint32_t)(ab + (bb - ab) * t + 0.5f);
+}
+
+static void PutPx(int x, int y, uint32_t c, float a)
+{
+    if (x < g_clip.left || x >= g_clip.right || y < g_clip.top || y >= g_clip.bottom || a <= 0.002f)
+        return;
+    uint32_t *p = &g_px[y * g_pw + x];
+    if (a >= 0.998f)
+    {
+        *p = c;
+        return;
+    }
+    *p = Mix(*p, c, a);
+}
+
+/* デバイス座標 (float) の角丸四角 */
+static void FillRRd(float L, float T, float R, float B, float rad, uint32_t c, float alpha)
+{
+    int x0 = (int)floorf(L) - 1, x1 = (int)ceilf(R) + 1, y0 = (int)floorf(T) - 1, y1 = (int)ceilf(B) + 1;
+    if (x0 < g_clip.left)
+        x0 = g_clip.left;
+    if (y0 < g_clip.top)
+        y0 = g_clip.top;
+    if (x1 > g_clip.right)
+        x1 = g_clip.right;
+    if (y1 > g_clip.bottom)
+        y1 = g_clip.bottom;
+    float rr = fminf(rad, fminf((R - L) * 0.5f, (B - T) * 0.5f));
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float px = x + 0.5f, py = y + 0.5f;
+            /* 内側は計算を省く (十字形の領域は完全に塗られている) */
+            if ((px >= L + rr && px <= R - rr && py >= T + 1 && py <= B - 1) ||
+                (py >= T + rr && py <= B - rr && px >= L + 1 && px <= R - 1))
+                PutPx(x, y, c, alpha);
+            else
+                PutPx(x, y, c, RRectCov(px, py, L, T, R, B, rad) * alpha);
+        }
+}
+
+/* 内側に太さ t の枠線 */
+static void StrokeRRd(float L, float T, float R, float B, float rad, float t, uint32_t c, float alpha)
+{
+    int x0 = (int)floorf(L) - 1, x1 = (int)ceilf(R) + 1, y0 = (int)floorf(T) - 1, y1 = (int)ceilf(B) + 1;
+    if (x0 < g_clip.left)
+        x0 = g_clip.left;
+    if (y0 < g_clip.top)
+        y0 = g_clip.top;
+    if (x1 > g_clip.right)
+        x1 = g_clip.right;
+    if (y1 > g_clip.bottom)
+        y1 = g_clip.bottom;
+    float ir = rad - t > 0 ? rad - t : 0;
+    float rr = fminf(rad, fminf((R - L) * 0.5f, (B - T) * 0.5f));
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float qx = x + 0.5f, qy = y + 0.5f;
+            if ((qx >= L + rr && qx <= R - rr && qy >= T + t + 1 && qy <= B - t - 1) ||
+                (qy >= T + rr && qy <= B - rr && qx >= L + t + 1 && qx <= R - t - 1))
+                continue; /* 枠線から十分内側 */
+            float o = RRectCov(x + 0.5f, y + 0.5f, L, T, R, B, rad);
+            if (o <= 0)
+                continue;
+            float i = RRectCov(x + 0.5f, y + 0.5f, L + t, T + t, R - t, B - t, ir);
+            PutPx(x, y, c, (o - i) * alpha);
+        }
+}
+
+/* 太さ th の線 (両端は丸) */
+static void LineD(float ax, float ay, float bx, float by, float th, uint32_t c, float alpha)
+{
+    float r = th * 0.5f;
+    int x0 = (int)floorf(fminf(ax, bx) - r) - 1, x1 = (int)ceilf(fmaxf(ax, bx) + r) + 1;
+    int y0 = (int)floorf(fminf(ay, by) - r) - 1, y1 = (int)ceilf(fmaxf(ay, by) + r) + 1;
+    float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float px = x + 0.5f - ax, py = y + 0.5f - ay;
+            float t = l2 > 0 ? Clampf((px * dx + py * dy) / l2, 0, 1) : 0;
+            float ex = px - dx * t, ey = py - dy * t;
+            float d = sqrtf(ex * ex + ey * ey) - r;
+            PutPx(x, y, c, Clampf(0.5f - d, 0, 1) * alpha);
+        }
+}
+
+/* 論理座標のラッパー */
+static void RR(int x, int y, int w, int h, int rad, uint32_t c, float a)
+{
+    FillRRd(F(x), FY(y), F(x + w), FY(y + h), F(rad), c, a);
+}
+static void RRs(int x, int y, int w, int h, int rad, float t, uint32_t c, float a)
+{
+    StrokeRRd(F(x), FY(y), F(x + w), FY(y + h), F(rad), t * g_dpi, c, a);
+}
+static void Dot(float cx, float cy, float r, uint32_t c, float a)
+{
+    FillRRd((cx - r) * g_dpi, FY(0) + (cy - r) * g_dpi, (cx + r) * g_dpi, FY(0) + (cy + r) * g_dpi, r * g_dpi, c, a);
+}
+static void Ln(float ax, float ay, float bx, float by, float th, uint32_t c, float a)
+{
+    LineD(ax * g_dpi, FY(0) + ay * g_dpi, bx * g_dpi, FY(0) + by * g_dpi, th * g_dpi, c, a);
+}
+
+static void Txt(const wchar_t *s, int x, int y, int w, int h, HFONT f, uint32_t col, UINT fmt)
+{
+    RECT r = {S(x), DY(y), S(x + w), DY(y + h)};
+    RECT vis;
+    if (!IntersectRect(&vis, &r, &g_clip))
+        return;
+    HRGN rg = CreateRectRgn(g_clip.left, g_clip.top, g_clip.right, g_clip.bottom);
+    SelectClipRgn(g_mem, rg);
+    SelectObject(g_mem, f);
+    SetBkMode(g_mem, TRANSPARENT);
+    SetTextColor(g_mem, RGB((col >> 16) & 255, (col >> 8) & 255, col & 255));
+    DrawTextW(g_mem, s, -1, &r, fmt);
+    SelectClipRgn(g_mem, NULL);
+    DeleteObject(rg);
+}
+#define FL_L (DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX)
+#define FL_C (DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX)
+#define FL_R (DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX)
+#define FL_W (DT_LEFT | DT_WORDBREAK | DT_NOPREFIX)
+
+/* ------------------------------------------------------------------ */
+/* ヒットテスト / フォーカス / ホバー                                       */
+/* ------------------------------------------------------------------ */
+static BOOL IsHover(int id, int arg) { return g_hoverId == id && g_hoverArg == arg; }
+static BOOL IsFocus(int id, int arg) { return g_kbd && g_focusId == id && g_focusArg == arg; }
+
+static void AddHit(int x, int y, int w, int h, int id, int arg, BOOL en, BOOL content, int rad)
+{
+    if (g_nhit >= (int)(sizeof(g_hit) / sizeof(g_hit[0])))
+        return;
+    Hit *t = &g_hit[g_nhit++];
+    t->r.left = S(x);
+    t->r.top = DY(y);
+    t->r.right = S(x + w);
+    t->r.bottom = DY(y + h);
+    t->id = id;
+    t->arg = arg;
+    t->en = en;
+    t->content = content;
+    t->x0 = t->x1 = 0;
+    if (IsFocus(id, arg) && en)
+        RRs(x - 3, y - 3, w + 6, h + 6, rad + 3, 2.0f, g_pal->accent, 0.9f);
+}
+
+static Hit *HitAt(int px, int py)
+{
+    int vTop = S(HEAD_H), vBot = S(WIN_H - FOOT_H);
+    for (int i = g_nhit - 1; i >= 0; i--)
+    {
+        Hit *t = &g_hit[i];
+        if (px < t->r.left || px >= t->r.right || py < t->r.top || py >= t->r.bottom)
+            continue;
+        if (t->content && (py < vTop || py >= vBot || px < S(SIDE_W)))
+            continue;
+        return t;
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* 部品                                                                  */
+/* ------------------------------------------------------------------ */
+static BOOL g_inContent; /* 描画中の部品がスクロール領域内か */
+
+static float AnimVal(int id, float target)
+{
+    if (!g_ainit[id])
+    {
+        g_av[id] = target;
+        g_ainit[id] = TRUE;
+    }
+    g_at[id] = target;
+    return g_av[id];
+}
+
+static void Toggle(int id, int x, int y, BOOL on, BOOL en)
+{
+    float t = AnimVal(id, on ? 1.0f : 0.0f);
+    float a = en ? 1.0f : 0.45f;
+    uint32_t col = Mix(g_pal->track, g_pal->accent, t);
+    RR(x, y, 44, 24, 12, col, a);
+    if (t < 0.99f)
+        RRs(x, y, 44, 24, 12, 1.0f, Mix(g_pal->sub, g_pal->accent, t), 0.5f * a * (1 - t));
+    float kx = 12.0f + 20.0f * t;
+    float kr = 7.0f + 1.0f * t;
+    Dot(x + kx, y + 12.0f, kr, g_pal->knob, a);
+    AddHit(x, y, 44, 24, id, 0, en, g_inContent, 12);
+}
+
+static void Segmented(int id, int x, int y, int w, const wchar_t *const *labels, int n, int sel, BOOL en)
+{
+    float a = en ? 1.0f : 0.45f;
+    RR(x, y, w, 34, 9, g_pal->field, a);
+    int sw = (w - 6) / n;
+    for (int i = 0; i < n; i++)
+    {
+        int sx = x + 3 + i * sw;
+        BOOL s = i == sel;
+        if (s)
+            RR(sx, y + 3, sw, 28, 7, g_pal->accent, a);
+        else if (IsHover(id, i) && en)
+            RR(sx, y + 3, sw, 28, 7, g_pal->fieldHover, 1.0f);
+        Txt(labels[i], sx, y + 3, sw, 28, g_fBtn, s ? 0xFFFFFF : (en ? g_pal->text : g_pal->sub), FL_C);
+        AddHit(sx, y + 3, sw, 28, id, i, en, g_inContent, 7);
+    }
+}
+
+static void Button(int id, int arg, int x, int y, int w, int h, const wchar_t *label, int style, BOOL en)
+{
+    /* style 0:通常 1:主要(アクセント) 2:注意(赤文字) */
+    float a = en ? 1.0f : 0.45f;
+    BOOL hv = IsHover(id, arg) && en;
+    uint32_t fill, tx;
+    if (style == 1)
+    {
+        fill = hv ? Mix(g_pal->accent, 0x000000, 0.14f) : g_pal->accent;
+        tx = 0xFFFFFF;
+    }
+    else
+    {
+        fill = hv ? g_pal->fieldHover : g_pal->field;
+        tx = style == 2 ? g_pal->danger : g_pal->text;
+    }
+    RR(x, y, w, h, 9, fill, a);
+    if (style != 1)
+        RRs(x, y, w, h, 9, 1.0f, g_pal->border, 0.8f * a);
+    Txt(label, x, y, w, h, g_fBtn, tx, FL_C);
+    AddHit(x, y, w, h, id, arg, en, g_inContent, 9);
+}
+
+static void Dropdown(int id, int x, int y, int w, const wchar_t *text, BOOL en)
+{
+    float a = en ? 1.0f : 0.45f;
+    BOOL hv = IsHover(id, 0) && en;
+    RR(x, y, w, 34, 9, hv ? g_pal->fieldHover : g_pal->field, a);
+    RRs(x, y, w, 34, 9, 1.0f, g_pal->border, 0.8f * a);
+    Txt(text, x + 14, y, w - 44, 34, g_fBtn, en ? g_pal->text : g_pal->sub, FL_L);
+    float cx = (float)(x + w - 20), cy = (float)(y + 17);
+    Ln(cx - 4.5f, cy - 2.0f, cx, cy + 2.5f, 1.8f, g_pal->sub, a);
+    Ln(cx, cy + 2.5f, cx + 4.5f, cy - 2.0f, 1.8f, g_pal->sub, a);
+    AddHit(x, y, w, 34, id, 0, en, g_inContent, 9);
+}
+
+static void Stepper(int id, int x, int y, const wchar_t *text, BOOL en, BOOL canMinus, BOOL canPlus)
+{
+    float a = en ? 1.0f : 0.45f;
+    for (int i = 0; i < 2; i++)
+    {
+        int bx = i == 0 ? x : x + 36 + 76;
+        BOOL ok = en && (i == 0 ? canMinus : canPlus);
+        BOOL hv = IsHover(id, i) && ok;
+        RR(bx, y, 36, 34, 9, hv ? g_pal->fieldHover : g_pal->field, en ? (ok ? 1.0f : 0.55f) : 0.45f);
+        RRs(bx, y, 36, 34, 9, 1.0f, g_pal->border, 0.8f * a);
+        float cx = bx + 18.0f, cy = y + 17.0f;
+        float ia = ok ? 1.0f : 0.4f;
+        Ln(cx - 5, cy, cx + 5, cy, 1.8f, g_pal->text, ia);
+        if (i == 1)
+            Ln(cx, cy - 5, cx, cy + 5, 1.8f, g_pal->text, ia);
+        AddHit(bx, y, 36, 34, id, i, ok, g_inContent, 9);
+    }
+    Txt(text, x + 36, y, 76, 34, g_fBtn, en ? g_pal->text : g_pal->sub, FL_C);
+}
+
+/* スライダー: 値の表示 + 左のトラック。範囲は SliderRange() で決まる */
+static void SliderRange(int id, int *mn, int *mx, int *step)
+{
+    switch (id)
+    {
+    case W_SL_HIDEMS:
+        *mn = 100, *mx = 5000, *step = 100;
+        break;
+    case W_SL_ICON:
+        *mn = 32, *mx = 96, *step = 2;
+        break;
+    case W_SL_ZOOM:
+        *mn = 100, *mx = 200, *step = 5;
+        break;
+    default: /* W_SL_OPACITY */
+        *mn = 30, *mx = 100, *step = 5;
+        break;
+    }
+}
+
+static void Slider(int id, int x, int y, int w, int value, const wchar_t *label, BOOL en)
+{
+    int mn, mx, st;
+    SliderRange(id, &mn, &mx, &st);
+    float a = en ? 1.0f : 0.45f;
+    int tw = w - 70;
+    float t = Clampf((float)(value - mn) / (float)(mx - mn), 0, 1);
+    int ty = y + 16;
+    RR(x, ty - 2, tw, 4, 2, g_pal->track, a);
+    RR(x, ty - 2, (int)(tw * t + 0.5f), 4, 2, g_pal->accent, a);
+    float kx = x + tw * t;
+    BOOL hv = (IsHover(id, 0) || (g_dragSlider && g_dragId == id)) && en;
+    Dot(kx, (float)ty, hv ? 10.0f : 9.0f, g_pal->knob, a);
+    Dot(kx, (float)ty, hv ? 6.5f : 5.5f, g_pal->accent, a);
+    Txt(label, x + tw + 8, y, 62, 32, g_fBtn, en ? g_pal->text : g_pal->sub, FL_R);
+    if (g_nhit < (int)(sizeof(g_hit) / sizeof(g_hit[0])))
+    {
+        AddHit(x - 10, y, tw + 20, 32, id, 0, en, g_inContent, 10);
+        g_hit[g_nhit - 1].x0 = S(x);
+        g_hit[g_nhit - 1].x1 = S(x + tw);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* ページ共通の部品 (セクション / カード / 行)                              */
+/* ------------------------------------------------------------------ */
+static int g_y; /* コンテンツのカーソル (論理) */
+static int g_cardTop, g_cardH;
+
+static void Section(const wchar_t *t)
+{
+    Txt(t, CX + 4, g_y + 2, CW, 24, g_fSec, g_pal->text, FL_L);
+    g_y += 32;
+}
+
+static void CardBegin(int h)
+{
+    g_cardTop = g_y;
+    g_cardH = h;
+    RR(CX, g_y, CW, h, 12, g_pal->card, 1.0f);
+    RRs(CX, g_y, CW, h, 12, 1.0f, g_pal->border, 1.0f);
+}
+static void CardEnd(void) { g_y = g_cardTop + g_cardH + 22; }
+
+/* 行 i の左側 (タイトル + 説明)。reserve は右側の部品が使う幅 */
+static void RowText(int i, int rh, const wchar_t *title, const wchar_t *desc, int reserve, BOOL en)
+{
+    int top = g_cardTop + i * rh;
+    if (i > 0)
+        RR(CX + 18, top, CW - 36, 1, 0, g_pal->sep, 1.0f);
+    int w = CW - 36 - reserve - 12;
+    uint32_t tc = en ? g_pal->text : g_pal->sub;
+    if (desc && desc[0])
+    {
+        Txt(title, CX + 18, top + 11, w, 22, g_fBody, tc, FL_L);
+        Txt(desc, CX + 18, top + 33, w, 20, g_fSmall, g_pal->sub, FL_L);
+    }
+    else
+        Txt(title, CX + 18, top, w, rh, g_fBody, tc, FL_L);
+}
+static int RowTop(int i, int rh) { return g_cardTop + i * rh; }
+static int RightX(int w) { return CX + CW - 18 - w; }
+
+static void Hint(const wchar_t *t)
+{
+    Txt(t, CX + 4, g_y, CW - 8, 36, g_fSmall, g_pal->sub, FL_W);
+    g_y += 40;
+}
+
+/* ------------------------------------------------------------------ */
+/* ページの中身                                                          */
+/* ------------------------------------------------------------------ */
+static void VkName(int vk, wchar_t *out, int cch)
+{
+    if (vk >= VK_F1 && vk <= VK_F24)
+        _snwprintf(out, cch, L"F%d", vk - VK_F1 + 1);
+    else if (vk == VK_PAUSE)
+        wcsncpy(out, L"Pause", cch);
+    else if (vk == VK_SCROLL)
+        wcsncpy(out, L"Scroll Lock", cch);
+    else
+    {
+        LONG sc = (LONG)MapVirtualKeyW((UINT)vk, 0) << 16;
+        if (!sc || !GetKeyNameTextW(sc, out, cch))
+            _snwprintf(out, cch, L"キー %d", vk);
+    }
+    out[cch - 1] = 0;
+}
+
+static void PageGeneral(void)
+{
+    if (g_first)
+    {
+        CardBegin(64);
+        RR(CX, g_y, CW, 64, 12, g_pal->accent, g_dark ? 0.22f : 0.12f);
+        RRs(CX, g_y, CW, 64, 12, 1.0f, g_pal->accent, 0.5f);
+        Txt(L"ようこそ！使う機能を選んで「開始」を押してください。", CX + 18, g_y + 8, CW - 36, 26,
+            g_fBody, g_pal->text, FL_L);
+        Txt(L"ここで選んだ内容は、あとからいつでも変更できます。", CX + 18, g_y + 33, CW - 36, 22, g_fSmall, g_pal->sub,
+            FL_L);
+        CardEnd();
+    }
+
+    Section(L"機能");
+    CardBegin(RH * 3);
+    {
+        RowText(0, RH, L"ドック", L"画面の端にアプリを並べて、ワンクリックで起動・切り替え", 150, TRUE);
+        int t = RowTop(0, RH);
+        Toggle(W_TG_DOCK, RightX(44), t + (RH - 24) / 2, g_dockOn, TRUE);
+        Button(W_GOTO, PAGE_DOCK, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        RowText(1, RH, L"ランチャー", L"ショートカットキーで開く、全画面のアプリ一覧", 150, TRUE);
+        t = RowTop(1, RH);
+        Toggle(W_TG_LN, RightX(44), t + (RH - 24) / 2, g_lnOn, TRUE);
+        Button(W_GOTO, PAGE_LAUNCHER, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        wchar_t d[64];
+        _snwprintf(d, 64, L"デスクトップに置いている検索バー: %d 個", SearchBar_Count());
+        d[63] = 0;
+        RowText(2, RH, L"デスクトップ検索バー", d, 110, TRUE);
+        t = RowTop(2, RH);
+        Button(W_GOTO, PAGE_SEARCH, RightX(88), t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+    }
+    CardEnd();
+
+    Section(L"外観");
+    CardBegin(RH);
+    {
+        static const wchar_t *const th[] = {L"自動", L"ライト", L"ダーク"};
+        RowText(0, RH, L"テーマ", L"自動にすると Windows の設定に合わせます", 250, TRUE);
+        Segmented(W_SEG_THEME, RightX(246), RowTop(0, RH) + (RH - 34) / 2, 246, th, 3, g_theme, TRUE);
+    }
+    CardEnd();
+
+    Section(L"システム");
+    int rows = g_first ? 2 : 3;
+    CardBegin(RH * rows);
+    {
+        RowText(0, RH, L"Windows の起動時に自動で開始", L"ログイン時に PromDock をバックグラウンドで起動します", 60, TRUE);
+        Toggle(W_TG_AUTOSTART, RightX(44), RowTop(0, RH) + (RH - 24) / 2, g_autoStart, TRUE);
+
+        RowText(1, RH, L"設定ファイルのフォルダ", L"PromDock.exe と同じ場所に、設定が保存されています", 110, TRUE);
+        Button(W_BTN_OPENDIR, 0, RightX(100), RowTop(1, RH) + (RH - 34) / 2, 100, 34, L"フォルダを開く", 0, TRUE);
+
+        if (!g_first)
+        {
+            RowText(2, RH, L"PromDock を終了", L"ドック・ランチャー・検索バーをすべて閉じます", 110, TRUE);
+            Button(W_BTN_QUIT, 0, RightX(100), RowTop(2, RH) + (RH - 34) / 2, 100, 34, L"終了する", 2, TRUE);
+        }
+    }
+    CardEnd();
+}
+
+static void PageDock(void)
+{
+    BOOL on = g_dockOn;
+    Section(L"表示");
+    CardBegin(RH * 3);
+    {
+        static const wchar_t *const pos[] = {L"下", L"上", L"左", L"右"};
+        RowText(0, RH, L"ドックを有効にする", L"オフにすると、ドックを非表示にします", 60, TRUE);
+        Toggle(W_TG_DOCK, RightX(44), RowTop(0, RH) + (RH - 24) / 2, g_dockOn, TRUE);
+
+        RowText(1, RH, L"表示位置", L"ドックを置く画面の端", 260, on);
+        Segmented(W_SEG_EDGE, RightX(240), RowTop(1, RH) + (RH - 34) / 2, 240, pos, 4, Dock_GetEdge(), on);
+
+        RowText(2, RH, L"端に沿った位置", L"中央に戻します。Ctrl + ドラッグで自由に動かせます", 110, on);
+        Button(W_BTN_RESETPOS, 0, RightX(100), RowTop(2, RH) + (RH - 34) / 2, 100, 34, L"中央に戻す", 0, on);
+    }
+    CardEnd();
+
+    Section(L"動作");
+    BOOL ah = Dock_GetAutoHide();
+    CardBegin(RH * 2);
+    {
+        RowText(0, RH, L"自動的に隠す", L"マウスを離すと、画面の端へ隠れます", 60, on);
+        Toggle(W_TG_AUTOHIDE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, ah, on);
+
+        wchar_t lb[24];
+        int ms = Dock_GetHideMs();
+        _snwprintf(lb, 24, L"%.1f 秒", ms / 1000.0f);
+        lb[23] = 0;
+        RowText(1, RH, L"隠れるまでの時間", L"マウスを離してから隠れるまでの待ち時間", 290, on && ah);
+        Slider(W_SL_HIDEMS, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, ms, lb, on && ah);
+    }
+    CardEnd();
+
+    Section(L"外観");
+    CardBegin(RH * 3);
+    {
+        wchar_t lb[24];
+        int v = Dock_GetIconSize();
+        _snwprintf(lb, 24, L"%d px", v);
+        lb[23] = 0;
+        RowText(0, RH, L"アイコンのサイズ", L"ドックに並ぶアイコンの大きさ", 290, on);
+        Slider(W_SL_ICON, RightX(280), RowTop(0, RH) + (RH - 32) / 2, 280, v, lb, on);
+
+        v = Dock_GetZoom();
+        _snwprintf(lb, 24, L"%d %%", v);
+        lb[23] = 0;
+        RowText(1, RH, L"ホバー時の拡大率", L"100% にすると拡大しません", 290, on);
+        Slider(W_SL_ZOOM, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, v, lb, on);
+
+        v = Dock_GetOpacity();
+        _snwprintf(lb, 24, L"%d %%", v);
+        lb[23] = 0;
+        RowText(2, RH, L"背景の濃さ", L"小さいほど背景が透けます", 290, on);
+        Slider(W_SL_OPACITY, RightX(280), RowTop(2, RH) + (RH - 32) / 2, 280, v, lb, on);
+    }
+    CardEnd();
+    Hint(L"アプリの追加はファイルやフォルダをドックへドラッグ&ドロップ、削除はドックの外へドラッグするか右クリックから行います。");
+}
+
+static void PageLauncher(void)
+{
+    BOOL on = g_lnOn;
+    Section(L"基本");
+    CardBegin(RH * 2);
+    {
+        wchar_t kn[32];
+        VkName(Launcher_GetHotkey(), kn, 32);
+        RowText(0, RH, L"ランチャーを有効にする", L"オフにすると、ショートカットキーも無効になります", 60, TRUE);
+        Toggle(W_TG_LN, RightX(44), RowTop(0, RH) + (RH - 24) / 2, g_lnOn, TRUE);
+
+        RowText(1, RH, L"開閉のショートカットキー", L"どのアプリを使っていても、このキーで開閉できます", 150, on);
+        Dropdown(W_DD_HOTKEY, RightX(140), RowTop(1, RH) + (RH - 34) / 2, 140, kn, on);
+    }
+    CardEnd();
+
+    Section(L"表示方法");
+    CardBegin(RH * 2);
+    {
+        static const wchar_t *const st[] = {L"通常", L"端に隠す"};
+        static const wchar_t *const ed[] = {L"左", L"右", L"上", L"下"};
+        RowText(0, RH, L"表示スタイル", L"端に隠すと、タブをクリックしてスライド表示", 250, on);
+        Segmented(W_SEG_LNSTYLE, RightX(240), RowTop(0, RH) + (RH - 34) / 2, 240, st, 2, g_lnStyle, on);
+
+        RowText(1, RH, L"タブを置く端", L"「端に隠す」を選んだときに使います", 260, on && g_lnStyle == 1);
+        Segmented(W_SEG_LNEDGE, RightX(240), RowTop(1, RH) + (RH - 34) / 2, 240, ed, 4, g_lnEdge,
+                  on && g_lnStyle == 1);
+    }
+    CardEnd();
+
+    Section(L"グリッド");
+    CardBegin(RH * 2);
+    {
+        int cols = Launcher_GetCols(), rows = Launcher_GetRows();
+        wchar_t t[16];
+        if (cols > 0)
+            _snwprintf(t, 16, L"%d 列", cols);
+        else
+            wcscpy(t, L"自動");
+        RowText(0, RH, L"列数", L"「自動」にすると画面の大きさに合わせます", 170, on);
+        Stepper(W_STP_COLS, RightX(148), RowTop(0, RH) + (RH - 34) / 2, t, on, cols > 0, cols < 20);
+
+        if (rows > 0)
+            _snwprintf(t, 16, L"%d 行", rows);
+        else
+            wcscpy(t, L"自動");
+        RowText(1, RH, L"行数", L"1 ページに並べる行数です", 170, on);
+        Stepper(W_STP_ROWS, RightX(148), RowTop(1, RH) + (RH - 34) / 2, t, on, rows > 0, rows < 20);
+    }
+    CardEnd();
+    Hint(L"アプリの追加・削除・並べ替えは、ランチャーを開いて右クリックメニューから行います。");
+}
+
+static void PageSearch(void)
+{
+    int n = SearchBar_Count();
+    Section(L"検索バーを追加");
+    CardBegin(RH * 3);
+    {
+        wchar_t t[96];
+        SearchBar_BrowserLabel(g_sbBrowser, t, 96);
+        RowText(0, RH, L"ブラウザ", L"検索結果を開くブラウザ", 230, TRUE);
+        Dropdown(W_DD_BROWSER, RightX(220), RowTop(0, RH) + (RH - 34) / 2, 220, t, TRUE);
+
+        RowText(1, RH, L"検索エンジン", L"検索に使うサービス", 230, TRUE);
+        Dropdown(W_DD_ENGINE, RightX(220), RowTop(1, RH) + (RH - 34) / 2, 220, SearchBar_EngineName(g_sbEngine), TRUE);
+
+        wchar_t d[48];
+        _snwprintf(d, 48, L"追加済み %d / %d 個", n, SB_LIMIT);
+        d[47] = 0;
+        RowText(2, RH, L"この組み合わせで追加", d, 110, TRUE);
+        Button(W_BTN_ADD, 0, RightX(100), RowTop(2, RH) + (RH - 34) / 2, 100, 34, L"追加", 1, n < SB_LIMIT);
+    }
+    CardEnd();
+
+    Section(L"デスクトップにある検索バー");
+    int lh = 52;
+    CardBegin(n > 0 ? n * lh : 64);
+    if (n == 0)
+        Txt(L"検索バーはまだありません。上のフォームから追加できます。", CX, g_cardTop, CW, 64, g_fBody, g_pal->sub, FL_C);
+    for (int i = 0; i < n; i++)
+    {
+        int top = g_cardTop + i * lh;
+        wchar_t d[160];
+        SearchBar_Describe(i, d, 160);
+        if (i > 0)
+            RR(CX + 18, top, CW - 36, 1, 0, g_pal->sep, 1.0f);
+        RR(CX + 18, top + 12, 28, 28, 8, g_pal->accent, g_dark ? 0.28f : 0.14f);
+        /* 虫眼鏡 */
+        float mx = CX + 30.5f, my = (float)(top + 25.0f);
+        Dot(mx, my, 5.2f, g_pal->accent, 1.0f);
+        Dot(mx, my, 3.4f, Mix(g_pal->card, g_pal->accent, g_dark ? 0.28f : 0.14f), 1.0f);
+        Ln(mx + 3.8f, my + 3.8f, mx + 7.5f, my + 7.5f, 1.8f, g_pal->accent, 1.0f);
+        Txt(d, CX + 58, top, CW - 58 - 100, lh, g_fBody, g_pal->text, FL_L);
+        Button(W_BTN_DEL, i, RightX(72), top + (lh - 32) / 2, 72, 32, L"削除", 2, TRUE);
+    }
+    CardEnd();
+
+    Section(L"配置");
+    CardBegin(RH);
+    {
+        BOOL mv = SearchBar_MoveMode();
+        RowText(0, RH, L"検索バーの位置を動かす", mv ? L"移動中です。検索バーをドラッグして好きな場所へ置いてください" : L"オンにすると、検索バーをドラッグで移動できます",
+                140, n > 0);
+        Button(W_BTN_MOVE, 0, RightX(130), RowTop(0, RH) + (RH - 34) / 2, 130, 34, mv ? L"移動を終了" : L"移動を開始",
+               mv ? 1 : 0, n > 0);
+    }
+    CardEnd();
+}
+
+/* ------------------------------------------------------------------ */
+/* サイドバー / ヘッダー / フッター / 全体                                  */
+/* ------------------------------------------------------------------ */
+static const wchar_t *const kNavName[PAGE_COUNT] = {L"全般", L"ドック", L"ランチャー", L"検索バー"};
+static const wchar_t *const kPageSub[PAGE_COUNT] = {
+    L"使う機能の切り替えと、アプリ全体の設定です。",
+    L"画面の端に置く、アプリのランチバーの設定です。",
+    L"全画面で開くアプリ一覧の設定です。",
+    L"デスクトップに置ける検索バーを管理します。"};
+
+static void NavIcon(int page, float cx, float cy, uint32_t c)
+{
+    switch (page)
+    {
+    case PAGE_GENERAL: /* スライダー3本 */
+        for (int i = 0; i < 3; i++)
+        {
+            float y = cy - 6 + i * 6;
+            Ln(cx - 8, y, cx + 8, y, 1.7f, c, 1.0f);
+            Dot(cx + (i == 1 ? 3.0f : (i == 0 ? -3.0f : 1.0f)), y, 2.6f, c, 1.0f);
+        }
+        break;
+    case PAGE_DOCK: /* 下にバー + 3つの四角 */
+        FillRRd(F(0) + (cx - 9) * g_dpi, FY(0) + (cy + 2) * g_dpi, (cx + 9) * g_dpi, FY(0) + (cy + 8) * g_dpi,
+                3 * g_dpi, c, 1.0f);
+        for (int i = 0; i < 3; i++)
+            FillRRd((cx - 7 + i * 5.6f) * g_dpi, FY(0) + (cy - 7) * g_dpi, (cx - 7 + i * 5.6f + 4) * g_dpi,
+                    FY(0) + (cy - 3) * g_dpi, 1.2f * g_dpi, c, 1.0f);
+        break;
+    case PAGE_LAUNCHER: /* 3x3 */
+        for (int j = 0; j < 3; j++)
+            for (int i = 0; i < 3; i++)
+                FillRRd((cx - 8 + i * 6.0f) * g_dpi, FY(0) + (cy - 8 + j * 6.0f) * g_dpi,
+                        (cx - 8 + i * 6.0f + 4) * g_dpi, FY(0) + (cy - 8 + j * 6.0f + 4) * g_dpi, 1.3f * g_dpi, c,
+                        1.0f);
+        break;
+    default: /* 虫眼鏡 */
+        Dot(cx - 2, cy - 2, 6.2f, c, 1.0f);
+        Dot(cx - 2, cy - 2, 4.4f, g_pal->side, 1.0f);
+        Ln(cx + 2.6f, cy + 2.6f, cx + 8, cy + 8, 2.0f, c, 1.0f);
+        break;
+    }
+}
+
+static void DrawSidebar(void)
+{
+    g_oy = 0;
+    g_inContent = FALSE;
+    RECT save = g_clip;
+    g_clip.left = 0;
+    g_clip.top = 0;
+    g_clip.right = S(SIDE_W);
+    g_clip.bottom = g_ph;
+    FillRRd(0, 0, F(SIDE_W), (float)g_ph, 0, g_pal->side, 1.0f);
+    RR(SIDE_W - 1, 0, 1, WIN_H, 0, g_pal->border, 0.8f);
+
+    /* 左上のロゴ (青と白のマーク) は表示しない */
+    Txt(L"PromDock", 24, 24, SIDE_W - 48, 34, g_fApp, g_pal->text, FL_L);
+
+    for (int i = 0; i < PAGE_COUNT; i++)
+    {
+        int y = 84 + i * 48, x = 14, w = SIDE_W - 28, h = 40;
+        BOOL sel = i == g_page;
+        BOOL hv = IsHover(W_NAV, i);
+        if (sel)
+        {
+            RR(x, y, w, h, 10, g_pal->card, 1.0f);
+            RRs(x, y, w, h, 10, 1.0f, g_pal->border, 0.9f);
+            RR(x + 1, y + 11, 4, 18, 2, g_pal->accent, 1.0f);
+        }
+        else if (hv)
+            RR(x, y, w, h, 10, g_pal->fieldHover, 0.7f);
+        NavIcon(i, (float)(x + 30), (float)(y + 20), sel ? g_pal->accent : g_pal->sub);
+        Txt(kNavName[i], x + 54, y, w - 60, h, g_fBody, sel ? g_pal->text : g_pal->text, FL_L);
+        AddHit(x, y, w, h, W_NAV, i, TRUE, FALSE, 10);
+    }
+    g_clip = save;
+}
+
+static void DrawHeader(void)
+{
+    g_oy = 0;
+    g_inContent = FALSE;
+    Txt(kNavName[g_page], CX, 26, CW, 40, g_fHead, g_pal->text, FL_L);
+    Txt(kPageSub[g_page], CX + 2, 66, CW, 24, g_fSmall, g_pal->sub, FL_L);
+}
+
+static void DrawFooter(void)
+{
+    g_oy = 0;
+    g_inContent = FALSE;
+    int y = WIN_H - FOOT_H;
+    FillRRd(F(SIDE_W), FY(y), F(WIN_W), F(WIN_H), 0, g_pal->bg, 1.0f);
+    RR(SIDE_W, y, WIN_W - SIDE_W, 1, 0, g_pal->border, 0.8f);
+
+    const wchar_t *msg = g_first ? L"「開始」を押すと設定を保存して、PromDock を起動します。"
+                                 : L"変更はすぐに反映・保存されます。";
+    uint32_t col = g_pal->sub;
+    if (g_notice[0])
+    {
+        msg = g_notice;
+        col = g_noticeWarn ? g_pal->danger : g_pal->accent;
+    }
+    Txt(msg, CX, y, 370, FOOT_H, g_fSmall, col, FL_L);
+
+    if (g_first)
+    {
+        Button(W_BTN_EXIT, 0, WIN_W - 36 - 112 - 12 - 88, y + (FOOT_H - 38) / 2, 88, 38, L"終了", 0, TRUE);
+        Button(W_BTN_OK, 0, WIN_W - 36 - 112, y + (FOOT_H - 38) / 2, 112, 38, L"開始", 1, TRUE);
+    }
+    else
+        Button(W_BTN_OK, 0, WIN_W - 36 - 112, y + (FOOT_H - 38) / 2, 112, 38, L"閉じる", 1, TRUE);
+}
+
+static void DrawScrollbar(int vh)
+{
+    int mx = g_contentH - vh;
+    if (mx <= 0)
+        return;
+    g_oy = 0;
+    float trackT = (float)HEAD_H, trackH = (float)vh;
+    float th = fmaxf(36.0f, trackH * vh / (float)g_contentH);
+    float ty = trackT + (trackH - th) * g_scroll[g_page] / (float)mx;
+    FillRRd(F(WIN_W - 12), ty * g_dpi, F(WIN_W - 8), (ty + th) * g_dpi, 2 * g_dpi, g_pal->sub, 0.45f);
+}
+
+static void DrawAll(void)
+{
+    g_nhit = 0;
+    /* 背景 */
+    g_clip.left = 0;
+    g_clip.top = 0;
+    g_clip.right = g_pw;
+    g_clip.bottom = g_ph;
+    uint32_t bg = g_pal->bg;
+    for (int i = 0; i < g_pw * g_ph; i++)
+        g_px[i] = bg;
+
+    int vh = WIN_H - FOOT_H - HEAD_H;
+    int maxScroll = g_contentH - vh;
+    if (maxScroll < 0)
+        maxScroll = 0;
+    g_scroll[g_page] = ClampInt(g_scroll[g_page], 0, maxScroll);
+
+    /* コンテンツ (スクロール領域) */
+    g_clip.left = S(SIDE_W);
+    g_clip.top = S(HEAD_H);
+    g_clip.right = g_pw;
+    g_clip.bottom = S(WIN_H - FOOT_H);
+    g_oy = HEAD_H - g_scroll[g_page];
+    g_inContent = TRUE;
+    g_y = 4;
+    switch (g_page)
+    {
+    case PAGE_GENERAL:
+        PageGeneral();
+        break;
+    case PAGE_DOCK:
+        PageDock();
+        break;
+    case PAGE_LAUNCHER:
+        PageLauncher();
+        break;
+    default:
+        PageSearch();
+        break;
+    }
+    g_contentH = g_y + 8;
+    g_inContent = FALSE;
+
+    /* 固定部分 */
+    g_clip.left = 0;
+    g_clip.top = 0;
+    g_clip.right = g_pw;
+    g_clip.bottom = g_ph;
+    DrawHeader();
+    DrawFooter();
+    DrawScrollbar(vh);
+    DrawSidebar();
+}
+
+/* ------------------------------------------------------------------ */
+/* 操作                                                                  */
+/* ------------------------------------------------------------------ */
+static void Redraw(void)
+{
+    if (g_set)
+        InvalidateRect(g_set, NULL, FALSE);
+}
+
+static void SetPage(int p)
+{
+    g_page = ClampInt(p, 0, PAGE_COUNT - 1);
+    g_focusId = W_NONE;
+    Redraw();
+}
+
+/* ドック/ランチャーの有効・無効 (どちらか一方は必ず有効) */
+static void ToggleFeature(int which)
+{
+    BOOL d = g_dockOn, l = g_lnOn;
+    if (which == 0)
+        d = !d;
+    else
+        l = !l;
+    if (!d && !l)
+    {
+        Notice(L"ドックとランチャーのどちらか一方は有効にしてください。", TRUE);
+        return;
+    }
+    g_dockOn = d;
+    g_lnOn = l;
+    if (!g_first)
+    {
+        SaveSettings();
+        if (which == 0)
+            Dock_SetEnabled(g_dockOn);
+        else
+            Launcher_SetEnabled(g_lnOn);
+    }
+    Redraw();
+}
+
+static void SetSlider(int id, int value, BOOL commit)
+{
+    int mn, mx, st;
+    SliderRange(id, &mn, &mx, &st);
+    value = mn + ((value - mn + st / 2) / st) * st;
+    value = ClampInt(value, mn, mx);
+    switch (id)
+    {
+    case W_SL_HIDEMS:
+        Dock_SetHideMs(value);
+        break;
+    case W_SL_ICON:
+        Dock_SetIconSize(value);
+        break;
+    case W_SL_ZOOM:
+        Dock_SetZoom(value);
+        break;
+    case W_SL_OPACITY:
+        Dock_SetOpacity(value);
+        break;
+    }
+    if (commit)
+        Dock_SaveSettings();
+    Redraw();
+}
+
+static int SliderGet(int id)
+{
+    switch (id)
+    {
+    case W_SL_HIDEMS:
+        return Dock_GetHideMs();
+    case W_SL_ICON:
+        return Dock_GetIconSize();
+    case W_SL_ZOOM:
+        return Dock_GetZoom();
+    default:
+        return Dock_GetOpacity();
+    }
+}
+
+static void SliderFromX(const Hit *h, int px, BOOL commit)
+{
+    int mn, mx, st;
+    SliderRange(h->id, &mn, &mx, &st);
+    float t = h->x1 > h->x0 ? Clampf((float)(px - h->x0) / (float)(h->x1 - h->x0), 0, 1) : 0;
+    SetSlider(h->id, mn + (int)(t * (mx - mn) + 0.5f), commit);
+}
+
+/* ランチャーのショートカットキーに選べるキー (単独で押せる、ふだん使わないキー) */
+static const int kHotkeys[] = {VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7,
+                               VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_PAUSE, VK_SCROLL};
+#define N_HOTKEYS ((int)(sizeof(kHotkeys) / sizeof(kHotkeys[0])))
+
+static void ShowDropdown(HWND hwnd, const Hit *h)
+{
+    HMENU m = CreatePopupMenu();
+    int n = 0;
+    if (h->id == W_DD_HOTKEY)
+    {
+        n = N_HOTKEYS;
+        for (int i = 0; i < n; i++)
+        {
+            wchar_t t[32];
+            VkName(kHotkeys[i], t, 32);
+            AppendMenuW(m, MF_STRING | (kHotkeys[i] == Launcher_GetHotkey() ? MF_CHECKED : 0), (UINT_PTR)(i + 1), t);
+        }
+    }
+    else if (h->id == W_DD_BROWSER)
+    {
+        n = SearchBar_BrowserCount();
+        for (int i = 0; i < n; i++)
+        {
+            wchar_t t[96];
+            SearchBar_BrowserLabel(i, t, 96);
+            AppendMenuW(m, MF_STRING | (i == g_sbBrowser ? MF_CHECKED : 0), (UINT_PTR)(i + 1), t);
+        }
+    }
+    else
+    {
+        n = SearchBar_EngineCount();
+        for (int i = 0; i < n; i++)
+            AppendMenuW(m, MF_STRING | (i == g_sbEngine ? MF_CHECKED : 0), (UINT_PTR)(i + 1), SearchBar_EngineName(i));
+    }
+    POINT pt = {h->r.left, h->r.bottom + S(4)};
+    ClientToScreen(hwnd, &pt);
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(m);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    if (cmd <= 0)
+        return;
+    int i = cmd - 1;
+    if (h->id == W_DD_HOTKEY)
+    {
+        if (i >= 0 && i < N_HOTKEYS)
+        {
+            if (!Launcher_SetHotkey(kHotkeys[i]))
+                Notice(L"そのキーは他のアプリが使用中のため、変更できませんでした。", TRUE);
+        }
+    }
+    else if (h->id == W_DD_BROWSER)
+        g_sbBrowser = i;
+    else
+        g_sbEngine = i;
+    Redraw();
+}
+
+static void Activate(HWND hwnd, const Hit *h)
+{
+    if (!h || !h->en)
+        return;
+    switch (h->id)
+    {
+    case W_NAV:
+    case W_GOTO:
+        SetPage(h->arg);
+        break;
+    case W_TG_DOCK:
+        ToggleFeature(0);
+        break;
+    case W_TG_LN:
+        ToggleFeature(1);
+        break;
+    case W_TG_AUTOSTART:
+        g_autoStart = !g_autoStart;
+        if (!g_first)
+            AutoStartSet(g_autoStart);
+        Redraw();
+        break;
+    case W_TG_AUTOHIDE:
+        Dock_SetAutoHide(!Dock_GetAutoHide());
+        Dock_SaveSettings();
+        Redraw();
+        break;
+    case W_SEG_THEME:
+        g_theme = h->arg;
+        if (!g_first)
+            SaveSettings();
+        ApplyTheme();
+        break;
+    case W_SEG_EDGE:
+        Dock_SetEdge(h->arg);
+        Dock_SaveSettings();
+        Redraw();
+        break;
+    case W_SEG_LNSTYLE:
+        g_lnStyle = h->arg;
+        if (!g_first)
+        {
+            SaveSettings();
+            Launcher_SetStyle(g_lnStyle, g_lnEdge);
+        }
+        Redraw();
+        break;
+    case W_SEG_LNEDGE:
+        g_lnEdge = h->arg;
+        if (!g_first)
+        {
+            SaveSettings();
+            Launcher_SetStyle(g_lnStyle, g_lnEdge);
+        }
+        Redraw();
+        break;
+    case W_STP_COLS:
+    case W_STP_ROWS:
+    {
+        int c = Launcher_GetCols(), r = Launcher_GetRows();
+        int d = h->arg == 0 ? -1 : 1;
+        if (h->id == W_STP_COLS)
+            c = ClampInt(c + d, 0, 20);
+        else
+            r = ClampInt(r + d, 0, 20);
+        Launcher_SetGrid(c, r);
+        Redraw();
+        break;
+    }
+    case W_DD_HOTKEY:
+    case W_DD_BROWSER:
+    case W_DD_ENGINE:
+        ShowDropdown(hwnd, h);
+        break;
+    case W_BTN_RESETPOS:
+        Dock_ResetPosition();
+        Dock_SaveSettings();
+        Notice(L"ドックを端の中央に戻しました。", FALSE);
+        break;
+    case W_BTN_OPENDIR:
+    {
+        wchar_t dir[MAX_PATH];
+        wcscpy(dir, g_ini);
+        wchar_t *sl = wcsrchr(dir, L'\\');
+        if (sl)
+            *sl = 0;
+        ShellExecuteW(NULL, L"open", dir, NULL, NULL, SW_SHOWNORMAL);
+        break;
+    }
+    case W_BTN_QUIT:
+        DestroyWindow(hwnd);
+        Dock_Quit();
+        break;
+    case W_BTN_ADD:
+        if (!SearchBar_Add(g_sbBrowser, g_sbEngine))
+            Notice(L"追加できる検索バーは最大 8 個までです。", TRUE);
+        else
+            Notice(L"検索バーを追加しました。デスクトップに表示されています。", FALSE);
+        Redraw();
+        break;
+    case W_BTN_DEL:
+        SearchBar_Remove(h->arg); /* 内部で表示も更新される */
+        Redraw();
+        break;
+    case W_BTN_MOVE:
+        SearchBar_SetMoveMode(!SearchBar_MoveMode());
+        Redraw();
+        break;
+    case W_BTN_OK:
+        if (g_first)
+        {
+            g_accepted = TRUE;
+            if (g_autoStart)
+                AutoStartSet(TRUE);
+            ApplyAll();
+        }
+        DestroyWindow(hwnd);
+        break;
+    case W_BTN_EXIT:
+        DestroyWindow(hwnd);
+        break;
+    }
+}
+
+/* Tab / Shift+Tab でフォーカスを移動 */
+static void FocusMove(int dir)
+{
+    if (g_nhit <= 0)
+        return;
+    int cur = -1;
+    for (int i = 0; i < g_nhit; i++)
+        if (g_hit[i].id == g_focusId && g_hit[i].arg == g_focusArg)
+            cur = i;
+    for (int k = 1; k <= g_nhit; k++)
+    {
+        int i = ((cur < 0 ? (dir > 0 ? -1 : 0) : cur) + dir * k + g_nhit * 2) % g_nhit;
+        if (g_hit[i].en)
+        {
+            g_focusId = g_hit[i].id;
+            g_focusArg = g_hit[i].arg;
+            /* スクロール領域内の部品は見える位置までスクロール */
+            if (g_hit[i].content)
+            {
+                int top = (int)(g_hit[i].r.top / g_dpi), bot = (int)(g_hit[i].r.bottom / g_dpi);
+                int vt = HEAD_H, vb = WIN_H - FOOT_H;
+                if (top < vt + 4)
+                    g_scroll[g_page] -= (vt + 4 - top);
+                else if (bot > vb - 4)
+                    g_scroll[g_page] += (bot - (vb - 4));
+                if (g_scroll[g_page] < 0)
+                    g_scroll[g_page] = 0;
+            }
+            break;
+        }
+    }
+    g_kbd = TRUE;
+    Redraw();
+}
+
+static Hit *FocusedHit(void)
+{
+    for (int i = 0; i < g_nhit; i++)
+        if (g_hit[i].id == g_focusId && g_hit[i].arg == g_focusArg)
+            return &g_hit[i];
+    return NULL;
+}
+
+static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        g_set = hwnd; /* ApplyTheme() でタイトルバーの色を変えるため、ここで先に入れておく */
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        g_pw = rc.right;
+        g_ph = rc.bottom;
+        BITMAPINFO bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = g_pw;
+        bi.bmiHeader.biHeight = -g_ph;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        HDC sdc = GetDC(hwnd);
+        g_mem = CreateCompatibleDC(sdc);
+        g_dib = CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, (void **)&g_px, NULL, 0);
+        ReleaseDC(hwnd, sdc);
+        if (!g_dib || !g_px)
+        {
+            g_set = NULL;
+            return -1;
+        }
+        g_oldBmp = (HBITMAP)SelectObject(g_mem, g_dib);
+        g_autoStart = g_first ? FALSE : AutoStartGet();
+        g_hoverId = g_pressId = g_focusId = W_NONE;
+        g_kbd = FALSE;
+        ApplyTheme();
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        if (g_mem && g_px)
+        {
+            DrawAll();
+            BitBlt(dc, 0, 0, g_pw, g_ph, g_mem, 0, 0, SRCCOPY);
+            BOOL anim = FALSE;
+            for (int i = 0; i < W_COUNT; i++)
+                if (g_ainit[i] && fabsf(g_at[i] - g_av[i]) > 0.003f)
+                    anim = TRUE;
+            if (anim)
+                SetTimer(hwnd, TIMER_ANIM, 16, NULL);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_TIMER:
+        if (wp == TIMER_ANIM)
+        {
+            BOOL any = FALSE;
+            for (int i = 0; i < W_COUNT; i++)
+            {
+                float d = g_at[i] - g_av[i];
+                if (fabsf(d) > 0.003f)
+                {
+                    g_av[i] += d * 0.42f;
+                    any = TRUE;
+                }
+                else
+                    g_av[i] = g_at[i];
+            }
+            if (!any)
+                KillTimer(hwnd, TIMER_ANIM);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        else if (wp == TIMER_NOTICE)
+        {
+            if (GetTickCount() - g_noticeTick > 4500)
+            {
+                g_notice[0] = 0;
+                KillTimer(hwnd, TIMER_NOTICE);
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+    {
+        if (!g_tracking)
+        {
+            TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&tme);
+            g_tracking = TRUE;
+        }
+        int px = GET_X_LPARAM(lp), py = GET_Y_LPARAM(lp);
+        if (g_dragSlider)
+        {
+            for (int i = 0; i < g_nhit; i++)
+                if (g_hit[i].id == g_dragId)
+                {
+                    SliderFromX(&g_hit[i], px, FALSE);
+                    break;
+                }
+            return 0;
+        }
+        Hit *h = HitAt(px, py);
+        int id = h && h->en ? h->id : W_NONE, arg = h && h->en ? h->arg : 0;
+        if (id != g_hoverId || arg != g_hoverArg)
+        {
+            g_hoverId = id;
+            g_hoverArg = arg;
+            Redraw();
+        }
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        g_tracking = FALSE;
+        if (g_hoverId != W_NONE)
+        {
+            g_hoverId = W_NONE;
+            Redraw();
+        }
+        return 0;
+
+    case WM_SETCURSOR:
+        if (LOWORD(lp) == HTCLIENT && g_hoverId != W_NONE)
+        {
+            SetCursor(LoadCursor(NULL, IDC_HAND));
+            return TRUE;
+        }
+        break;
+
+    case WM_LBUTTONDOWN:
+    {
+        SetFocus(hwnd);
+        g_kbd = FALSE;
+        Hit *h = HitAt(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+        if (h && h->en)
+        {
+            g_pressId = h->id;
+            g_pressArg = h->arg;
+            g_focusId = h->id;
+            g_focusArg = h->arg;
+            SetCapture(hwnd);
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_OPACITY)
+            {
+                g_dragSlider = TRUE;
+                g_dragId = h->id;
+                SliderFromX(h, GET_X_LPARAM(lp), FALSE);
+            }
+        }
+        else
+            g_pressId = W_NONE;
+        Redraw();
+        return 0;
+    }
+
+    case WM_LBUTTONUP:
+    {
+        int px = GET_X_LPARAM(lp), py = GET_Y_LPARAM(lp);
+        if (g_dragSlider)
+        {
+            g_dragSlider = FALSE;
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+            SetSlider(g_dragId, SliderGet(g_dragId), TRUE); /* 確定して保存 */
+            g_pressId = W_NONE;
+            return 0;
+        }
+        if (GetCapture() == hwnd)
+            ReleaseCapture();
+        Hit *h = HitAt(px, py);
+        int id = g_pressId, arg = g_pressArg;
+        g_pressId = W_NONE;
+        if (h && h->en && h->id == id && h->arg == arg)
+        {
+            Hit copy = *h; /* Activate 中に g_hit が組み替わっても安全なようにコピー */
+            Activate(hwnd, &copy);
+        }
+        return 0;
+    }
+
+    case WM_CAPTURECHANGED:
+        if (g_dragSlider)
+        {
+            g_dragSlider = FALSE;
+            Dock_SaveSettings();
+        }
+        return 0;
+
+    case WM_MOUSEWHEEL:
+    {
+        int d = GET_WHEEL_DELTA_WPARAM(wp);
+        g_scroll[g_page] -= d * 64 / 120;
+        int mx = g_contentH - (WIN_H - FOOT_H - HEAD_H);
+        g_scroll[g_page] = ClampInt(g_scroll[g_page], 0, mx < 0 ? 0 : mx);
+        Redraw();
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+    {
+        switch (wp)
+        {
+        case VK_TAB:
+            FocusMove((GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
+            return 0;
+        case VK_SPACE:
+        case VK_RETURN:
+        {
+            Hit *h = g_kbd ? FocusedHit() : NULL;
+            if (h)
+            {
+                Hit copy = *h;
+                Activate(hwnd, &copy);
+            }
+            else if (wp == VK_RETURN)
+            {
+                Hit ok = {{0, 0, 0, 0}, W_BTN_OK, 0, TRUE, FALSE, 0, 0};
+                Activate(hwnd, &ok);
+            }
+            return 0;
+        }
+        case VK_LEFT:
+        case VK_RIGHT:
+        {
+            Hit *h = g_kbd ? FocusedHit() : NULL;
+            if (!h || !h->en)
+                return 0;
+            int d = wp == VK_LEFT ? -1 : 1;
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_OPACITY)
+            {
+                int mn, mx, st;
+                SliderRange(h->id, &mn, &mx, &st);
+                SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
+            }
+            else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE)
+            {
+                int n = h->id == W_SEG_THEME ? 3 : (h->id == W_SEG_LNSTYLE ? 2 : 4);
+                int a = ClampInt(h->arg + d, 0, n - 1);
+                Hit copy = *h;
+                copy.arg = a;
+                g_focusArg = a;
+                Activate(hwnd, &copy);
+            }
+            return 0;
+        }
+        case VK_ESCAPE:
+            if (g_first)
+                return 0;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_SETTINGCHANGE:
+        if (g_theme == 0)
+            ApplyTheme();
+        break;
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        KillTimer(hwnd, TIMER_ANIM);
+        KillTimer(hwnd, TIMER_NOTICE);
+        if (g_mem && g_oldBmp)
+            SelectObject(g_mem, g_oldBmp);
+        if (g_dib)
+            DeleteObject(g_dib);
+        if (g_mem)
+            DeleteDC(g_mem);
+        g_dib = NULL;
+        g_mem = NULL;
+        g_px = NULL;
+        g_set = NULL;
+        g_dragSlider = FALSE;
+        g_notice[0] = 0;
+        memset(g_ainit, 0, sizeof(g_ainit));
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void OpenSettingsWindow(int page)
+{
+    if (page >= 0)
+        g_page = ClampInt(page, 0, PAGE_COUNT - 1);
+    if (g_set)
+    {
+        ShowWindow(g_set, SW_SHOWNORMAL);
+        SetForegroundWindow(g_set);
+        Redraw();
+        return;
+    }
+    static BOOL reg = FALSE;
+    if (!reg)
+    {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = SettingsProc;
+        wc.hInstance = g_hInst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = NULL;
+        wc.hIcon = g_icon;
+        wc.hIconSm = g_iconSm;
+        wc.lpszClassName = L"PromDockSettingsWnd";
+        RegisterClassExW(&wc);
+        reg = TRUE;
+    }
+    DWORD style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    DWORD ex = WS_EX_TOPMOST;
+    RECT rc = {0, 0, S(WIN_W), S(WIN_H)};
+    AdjustWindowRectEx(&rc, style, FALSE, ex);
+    int w = rc.right - rc.left, h = rc.bottom - rc.top;
+    RECT wa;
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    int x = wa.left + ((wa.right - wa.left) - w) / 2, y = wa.top + ((wa.bottom - wa.top) - h) / 2;
+    if (y < wa.top)
+        y = wa.top;
+    g_set = CreateWindowExW(ex, L"PromDockSettingsWnd", L"PromDock 設定", style, x, y, w, h, NULL, NULL, g_hInst, NULL);
+    if (!g_set)
+        return;
+    SendMessageW(g_set, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSm);
+    SendMessageW(g_set, WM_SETICON, ICON_BIG, (LPARAM)g_icon);
+    ShowWindow(g_set, SW_SHOWNORMAL);
+    UpdateWindow(g_set);
+    SetForegroundWindow(g_set);
+}
+
+void Settings_Open(void) { OpenSettingsWindow(-1); }
+void Settings_OpenPage(int page) { OpenSettingsWindow(page); }
+
+/* キー操作は SettingsProc が直接処理するので、ここでは何もしない (従来の呼び出し口を残してある) */
+BOOL Settings_PreTranslate(MSG *m)
+{
+    (void)m;
+    return FALSE;
+}
+
+void Settings_RefreshSearchBar(void) { Redraw(); }
+
+/* ------------------------------------------------------------------ */
+/* タスクトレイ                                                          */
+/* ------------------------------------------------------------------ */
+static void AddTray(void)
+{
+    NOTIFYICONDATAW nid;
+    memset(&nid, 0, sizeof(nid));
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_host;
+    nid.uID = 1;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAY;
+    nid.hIcon = g_iconSm ? g_iconSm : LoadIconW(NULL, IDI_APPLICATION);
+    wcscpy(nid.szTip, L"PromDock");
+    g_trayAdded = Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+static void DelTray(void)
+{
+    if (!g_trayAdded)
+        return;
+    NOTIFYICONDATAW nid;
+    memset(&nid, 0, sizeof(nid));
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g_host;
+    nid.uID = 1;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    g_trayAdded = FALSE;
+}
+
+static void ShowTrayMenu(HWND hwnd)
+{
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, L"アプリ設定…");
+    AppendMenuW(menu, MF_STRING | (g_lnOn ? 0 : MF_GRAYED), 2, L"ランチャーを開く / 閉じる");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 3, L"PromDock を終了");
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(hwnd);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(menu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    if (cmd == 1)
+        OpenSettingsWindow(-1);
+    else if (cmd == 2)
+        Launcher_Toggle();
+    else if (cmd == 3)
+        Dock_Quit();
+}
+
+static LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (g_msgTaskbar && msg == g_msgTaskbar)
+    {
+        g_trayAdded = FALSE;
+        AddTray(); /* エクスプローラー再起動後にアイコンを戻す */
+        return 0;
+    }
+    switch (msg)
+    {
+    case WM_TRAY:
+        if (LOWORD(lp) == WM_LBUTTONUP || LOWORD(lp) == WM_LBUTTONDBLCLK)
+            OpenSettingsWindow(-1);
+        else if (LOWORD(lp) == WM_RBUTTONUP)
+            ShowTrayMenu(hwnd);
+        return 0;
+    case WM_SHOWSETTINGS: /* 2つ目のインスタンスから */
+        OpenSettingsWindow(-1);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+/* ------------------------------------------------------------------ */
+static HFONT MakeFont(const LOGFONTW *base, int px, int weight)
+{
+    LOGFONTW lf = *base;
+    lf.lfHeight = -S(px);
+    lf.lfWidth = 0;
+    lf.lfWeight = weight;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    return CreateFontIndirectW(&lf);
+}
+
+BOOL Settings_Init(HINSTANCE hInst)
+{
+    g_hInst = hInst;
+
+    /* 二重起動: 動作中のアプリの設定ウィンドウを開いて終了 */
+    g_mutex = CreateMutexW(NULL, FALSE, L"PromDockSingleton");
+    if (GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        HWND other = FindWindowW(L"PromDockHostWnd", NULL);
+        if (other)
+        {
+            AllowSetForegroundWindow(ASFW_ANY);
+            PostMessageW(other, WM_SHOWSETTINGS, 0, 0);
+        }
+        CloseHandle(g_mutex);
+        g_mutex = NULL;
+        return FALSE;
+    }
+
+    HDC scr = GetDC(NULL);
+    g_dpi = GetDeviceCaps(scr, LOGPIXELSX) / 96.0f;
+    ReleaseDC(NULL, scr);
+
+    GetModuleFileNameW(NULL, g_ini, MAX_PATH);
+    wchar_t *slash = wcsrchr(g_ini, L'\\');
+    if (slash)
+        wcscpy(slash + 1, L"settings.ini");
+    else
+        wcscpy(g_ini, L"settings.ini");
+
+    /* 作業領域が小さい画面 (低解像度・高DPI) でも設定ウィンドウが収まるように倍率を下げる */
+    {
+        RECT wa;
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        float maxH = (float)(wa.bottom - wa.top - GetSystemMetrics(SM_CYCAPTION) - 2 * GetSystemMetrics(SM_CYFRAME) - 8);
+        float maxW = (float)(wa.right - wa.left - 2 * GetSystemMetrics(SM_CXFRAME) - 8);
+        float lim = fminf(maxW / WIN_W, maxH / WIN_H);
+        if (lim > 0.5f && g_dpi > lim)
+            g_dpi = lim;
+    }
+
+    g_icon = LoadAppIco(GetSystemMetrics(SM_CXICON));
+    g_iconSm = LoadAppIco(GetSystemMetrics(SM_CXSMICON));
+    if (!g_icon) /* promdock.ico が埋め込まれていないときは内蔵アイコン */
+        g_icon = MakeAppIcon();
+    if (!g_iconSm)
+        g_iconSm = g_icon;
+    NONCLIENTMETRICSW ncm;
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    g_fBody = MakeFont(&ncm.lfMessageFont, 15, FW_NORMAL);
+    g_fSmall = MakeFont(&ncm.lfMessageFont, 12, FW_NORMAL);
+    g_fBtn = MakeFont(&ncm.lfMessageFont, 14, FW_NORMAL);
+    g_fSec = MakeFont(&ncm.lfMessageFont, 15, FW_SEMIBOLD);
+    g_fApp = MakeFont(&ncm.lfMessageFont, 18, FW_BOLD);
+    g_fHead = MakeFont(&ncm.lfMessageFont, 28, FW_BOLD);
+
+    WNDCLASSEXW hc;
+    memset(&hc, 0, sizeof(hc));
+    hc.cbSize = sizeof(hc);
+    hc.lpfnWndProc = HostProc;
+    hc.hInstance = hInst;
+    hc.lpszClassName = L"PromDockHostWnd";
+    RegisterClassExW(&hc);
+    g_host = CreateWindowExW(0, hc.lpszClassName, L"PromDockHost", WS_POPUP, 0, 0, 0, 0, NULL, NULL, hInst, NULL);
+    g_msgTaskbar = RegisterWindowMessageW(L"TaskbarCreated");
+
+    g_first = GetFileAttributesW(g_ini) == INVALID_FILE_ATTRIBUTES;
+    if (!g_first)
+        LoadSettings();
+    g_sbBrowser = g_sbEngine = 0;
+
+    if (g_first)
+    {
+        /* 初回: 設定ウィンドウを先に出して、閉じるまで待つ */
+        OpenSettingsWindow(PAGE_GENERAL);
+        MSG m;
+        while (g_set && GetMessageW(&m, NULL, 0, 0) > 0)
+        {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (!g_accepted)
+        { /* 「終了」/ ×で閉じた -> 何も保存せず終了 (次回また初回設定が出る) */
+            Settings_Shutdown();
+            return FALSE;
+        }
+        g_first = FALSE;
+    }
+
+    AddTray();
+    return TRUE;
+}
+
+void Settings_Shutdown(void)
+{
+    DelTray();
+    if (g_set)
+        DestroyWindow(g_set);
+    if (g_host)
+        DestroyWindow(g_host);
+    g_set = g_host = NULL;
+    if (g_iconSm && g_iconSm != g_icon)
+        DestroyIcon(g_iconSm);
+    if (g_icon)
+        DestroyIcon(g_icon);
+    g_iconSm = NULL;
+    HFONT *fs[] = {&g_fBody, &g_fSmall, &g_fSec, &g_fHead, &g_fApp, &g_fBtn};
+    for (int i = 0; i < 6; i++)
+        if (*fs[i])
+        {
+            DeleteObject(*fs[i]);
+            *fs[i] = NULL;
+        }
+    g_icon = NULL;
+    if (g_mutex)
+    {
+        CloseHandle(g_mutex);
+        g_mutex = NULL;
+    }
+}

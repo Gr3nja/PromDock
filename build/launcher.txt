@@ -1,5 +1,0 @@
-@hotkey=122
-@cols=0
-@rows=0
-C:\Users\Grenja _ Developer\Desktop\PromDock\build\LauncherItems\aaa.txt
-C:\Users\Grenja _ Developer\Desktop\PromDock\build\LauncherItems\うんこお

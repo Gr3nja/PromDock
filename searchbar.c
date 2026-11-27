@@ -31,6 +31,7 @@
  *   ※ Settings_Init() は SearchBar_Init() より先に走る (初回設定) ので、
  *      追加・削除などは初期化前に呼ばれても安全に動くようにしてある。
  */
+/*ああああ*/
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
 #define _UNICODE

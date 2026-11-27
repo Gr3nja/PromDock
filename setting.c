@@ -2087,7 +2087,7 @@ BOOL Settings_Init(HINSTANCE hInst)
     AddTray();
     return TRUE;
 }
-
+/*ああああ*/
 void Settings_Shutdown(void)
 {
     DelTray();

@@ -2276,7 +2276,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     HDC scr = GetDC(NULL);
     g_dpi = GetDeviceCaps(scr, LOGPIXELSX) / 96.0f;
     ReleaseDC(NULL, scr);
-
+    /*ああああ*/
     /* 初回はここで設定ウィンドウが開き、ドック/ランチャーを有効にするか選ぶ。
        FALSE: 二重起動 (動作中のアプリの設定を開いた) か、初回設定で終了が選ばれた */
     if (!Settings_Init(hInst))

@@ -77,6 +77,7 @@ rem --- a running PromDock locks the exe, so close it first ---
 taskkill /f /im PromDock.exe >nul 2>nul
 
 rem --- promdock.ico (build.bat と同じフォルダ) があれば exe に埋め込む ---
+rem --- ああああ ---
 set "RES="
 if exist "promdock.ico" if exist "promdock.rc" (
     rc /nologo /fo build\promdock.res promdock.rc
@@ -119,4 +120,4 @@ exit /b
 rem  :scanroot  <ProgramFiles dir>  -> sets VCVARS from common paths (newest first)
 :scanroot
 for %%Y in (18 2026 2022 2019 2017) do for %%E in (Enterprise Professional Community BuildTools Preview) do if not defined VCVARS if exist "%~1\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%~1\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvars64.bat"
-exit /b
+exit /b 

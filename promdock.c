@@ -24,6 +24,8 @@
  *       @iconsize=48 (アイコンサイズ px) / @zoom=150 (ホバー時の拡大率 %) / @opacity=78 (背景の濃さ %)
  *       @style=0 (デザイン 0:標準 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ 6:オニキス 7:ノワール)
  *       デザインは右クリック > 設定 > デザイン、またはアプリ設定(ドック > 外観)から切り替えられる
+ *       @docktype=0 (ドックの形 0:バー 1:サークル。サークルは画面の端を中心にした半円状に並び、デザインもそのまま使える)
+ *       ドックの形は右クリック > 設定 > ドックの形、またはアプリ設定(ドック > 外観)から切り替えられる
  *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
  *   - デスクトップに置ける検索バー (searchbar.c / 同じexeにビルド。ブラウザと検索エンジンを選んで追加)
  *   - デスクトップに置ける画像・GIF (photoframe.c) と時計ウィジェット (clock.c) も同じexeにビルド
@@ -120,6 +122,7 @@ typedef struct
     BOOL iconOk;               /* FALSE: アイコン取得失敗(仮アイコン)。後で再取得する */
     uint32_t *mip[MIP_LEVELS]; /* premultiplied BGRA 256/128/64 */
     float scale, cx, sz;
+    float ang; /* サークル時: 円弧上の角度 (u軸からのラジアン。π/2が真上) */
     DWORD bounceStart;
     HWND wins[MAX_WINS];
     int nwin;
@@ -198,6 +201,13 @@ static const Theme g_themes[N_STYLES] = {
 };
 static int g_style = 0; /* 0:クラシック 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ */
 static const Theme *Th(void) { return &g_themes[g_style]; }
+
+/* ドックの形: 0=バー(従来) / 1=サークル (画面の端を中心にした半円状に並ぶ。デザインはバーと共通) */
+#define N_DOCKTYPES 2
+static const wchar_t *const g_dockTypeNames[N_DOCKTYPES] = {L"バー", L"サークル"};
+static int g_dockType = 0;
+static BOOL IsCircle(void) { return g_dockType == 1; }
+#define HALF_PI 1.5707963f
 /* 「背景の濃さ」設定 (既定 0.78 = 等倍) をテーマの塗りの不透明度に掛ける */
 static float OpacityMul(void) { return g_barStyle.fa / 0.78f; }
 
@@ -218,7 +228,8 @@ static int g_hideMs = 600;  /* 自動的に隠すまでの時間(ms) */
 static BOOL g_moving;       /* Ctrl+ドラッグで移動中 */
 static float g_dpi = 1.0f;
 static float g_base, g_gap, g_padx, g_pady, g_margin, g_bounce;
-static float g_baseline, g_barV0, g_barV1, g_barL, g_barR, g_hoverV; /* v: 画面端からの距離 */
+static float g_baseline, g_barV0, g_barV1, g_barL, g_barR, g_hoverV; /* v: 画面端からの距離 (サークル時の g_barV0/V1/baseline/hoverV は中心からの半径) */
+static float g_cU, g_cV, g_Rref, g_ro0, g_ro1;                       /* サークル: 中心(論理座標) / 基準半径 / 帯の内径・外径 */
 static BOOL g_hover, g_tracking, g_animOn, g_menuOpen, g_dragged;
 static BOOL g_autohide = FALSE;
 
@@ -319,6 +330,50 @@ static float SepW(void)
 {
     int np = NPinned();
     return (np > 0 && np < g_count) ? g_gap * 2.5f : 0.0f;
+}
+
+/* サークル: 極座標 (半径 rho, 角度 phi) -> 論理座標。phi は u 軸からの角度 (π/2 が真上) */
+static void PolarUV(float rho, float phi, float *u, float *v)
+{
+    *u = g_cU + rho * cosf(phi);
+    *v = g_cV + rho * sinf(phi);
+}
+/* ウィンドウ座標の点と、その点での接線方向 (ウィンドウ座標の単位ベクトル。不要なら NULL) */
+static void PolarW(float rho, float phi, float *x, float *y, float *tx, float *ty)
+{
+    float u, v;
+    PolarUV(rho, phi, &u, &v);
+    L2W(u, v, x, y);
+    if (tx && ty)
+    {
+        float u2, v2, x2, y2;
+        PolarUV(rho, phi + 0.02f, &u2, &v2);
+        L2W(u2, v2, &x2, &y2);
+        float dx = x2 - *x, dy = y2 - *y, l = sqrtf(dx * dx + dy * dy);
+        if (l < 1e-4f)
+            l = 1.0f;
+        *tx = dx / l;
+        *ty = dy / l;
+    }
+}
+/* 項目を並べる軸 (バー: u / サークル: 円弧の長さ) 上でのマウス位置。項目の cx と同じ座標系 */
+static float MouseAlong(void)
+{
+    if (!IsCircle())
+        return g_mouseU;
+    float dx = g_mouseU - g_cU, dy = g_mouseV - g_cV;
+    float phi = dy >= 0.0f ? atan2f(dy, dx) : (dx < 0.0f ? 3.14159265f : 0.0f);
+    return g_LW * 0.5f + (HALF_PI - phi) * g_Rref;
+}
+/* ドックの外へ引き出し中か (離すと削除) */
+static BOOL OutsideDock(void)
+{
+    if (IsCircle())
+    {
+        float dx = g_mouseU - g_cU, dy = g_mouseV - g_cV;
+        return sqrtf(dx * dx + dy * dy) > g_barV1 + 40.0f * g_dpi;
+    }
+    return g_mouseV > g_barV1 + 40.0f * g_dpi;
 }
 
 /* ------------------------------------------------------------------ */
@@ -746,7 +801,7 @@ static void SaveConfig(void)
         return;
     fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
     fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
-    fprintf(f, "@style=%d\r\n", g_style);
+    fprintf(f, "@style=%d\r\n@docktype=%d\r\n", g_style, g_dockType);
     for (int i = 0; i < g_count; i++)
     {
         if (!g_items[i].pinned)
@@ -806,6 +861,8 @@ static void LoadConfig(void)
                 g_barStyle.fa = ClampI(atoi(p + 9), 30, 100) / 100.0f;
             else if (strncmp(p, "@style=", 7) == 0)
                 g_style = ClampI(atoi(p + 7), 0, N_STYLES - 1);
+            else if (strncmp(p, "@docktype=", 10) == 0)
+                g_dockType = ClampI(atoi(p + 10), 0, N_DOCKTYPES - 1);
         }
         else if (*p && *p != '#')
         {
@@ -981,28 +1038,67 @@ static void ResizeDock(void)
 
     int n = g_count > 0 ? g_count : 1;
     float len = (float)(vert ? (wa.bottom - wa.top) : (wa.right - wa.left));
+    float perp = (float)(vert ? (wa.right - wa.left) : (wa.bottom - wa.top));
     float limit = len * 0.92f;
-    float sep = SepW();
-    g_base = g_baseSize * d;
-    for (;;)
-    { /* 画面に収まるまでアイコンを縮める */
-        float restW = n * g_base + (n - 1) * g_gap + 2 * g_padx + sep;
-        float extra = (n < 6 ? n : 6) * g_base * (g_maxScale - 1.0f);
-        g_LW = (int)(restW + extra + (g_base + g_gap) + 4 * g_margin);
-        if (g_LW <= limit || g_base <= 20 * d)
-            break;
-        g_base -= 1.0f;
-    }
-    float labelExt = vert ? LABEL_W_VERT * d : LABEL_H * d;
-    g_LH = (int)(g_margin + g_pady + g_maxScale * g_base + g_bounce + labelExt + 4);
-    g_W = vert ? g_LH : g_LW;
-    g_H = vert ? g_LW : g_LH;
 
-    g_barV0 = g_margin;
-    g_barV1 = g_margin + g_base + 2 * g_pady;
-    g_baseline = g_margin + g_pady;
-    g_hoverV = g_baseline + g_maxScale * g_base + 6 * d;
-    g_hideDelta = g_barV1 - 4 * d; /* 隠れた時はバーの端4pxだけ見せる */
+    if (IsCircle())
+    {
+        /* サークル: 画面の端に中心を置いた半円状の帯。個数が増えるほど半径が大きくなる。
+         * 軸方向 g_LW = 円の直径 + 余白 / 端からの厚み g_LH = 中心の高さ + 半径 + 余白 */
+        const float maxSpan = 2.3f; /* 帯が占める最大の角度 (約132度) */
+        g_base = g_baseSize * d;
+        for (;;)
+        { /* 画面に収まるまでアイコンを縮める */
+            /* 斜めに並ぶので、重ならないよう隙間を広めに取る (タイルは特に広く) */
+            g_gap = th->tiles ? g_base * 0.46f : fmaxf(th->gap * d, g_base * 0.22f);
+            float restLen = n * g_base + (n - 1) * g_gap + 2 * g_padx + SepW();
+            float extra = (n < 6 ? n : 6) * g_base * (g_maxScale - 1.0f);
+            float rmin = g_base * 1.7f + g_pady + g_base * 0.5f; /* 中の空きを確保 (ラベル表示用) */
+            g_Rref = fmaxf(rmin, (restLen + extra) / maxSpan);
+            g_ro0 = g_Rref - g_base * 0.5f - g_pady;
+            g_ro1 = g_ro0 + g_base + 2 * g_pady;
+            float roMax = g_ro0 + g_pady + g_maxScale * g_base + g_bounce;
+            g_cV = g_margin + g_pady + g_base * 0.5f;
+            g_LW = (int)(2 * (roMax + g_margin));
+            g_LH = (int)(g_cV + roMax + g_margin + 4);
+            if ((g_LW <= limit && g_LH <= perp * 0.92f) || g_base <= 20 * d)
+                break;
+            g_base -= 1.0f;
+        }
+        g_cU = g_LW * 0.5f;
+        g_W = vert ? g_LH : g_LW;
+        g_H = vert ? g_LW : g_LH;
+
+        g_barV0 = g_ro0;
+        g_barV1 = g_ro1;
+        g_baseline = g_ro0 + g_pady;
+        g_hoverV = g_baseline + g_maxScale * g_base + 6 * d;
+        g_hideDelta = g_cV + g_ro1 - 4 * d; /* 隠れた時は円弧の頂点だけ4px見せる */
+    }
+    else
+    {
+        float sep = SepW();
+        g_base = g_baseSize * d;
+        for (;;)
+        { /* 画面に収まるまでアイコンを縮める */
+            float restW = n * g_base + (n - 1) * g_gap + 2 * g_padx + sep;
+            float extra = (n < 6 ? n : 6) * g_base * (g_maxScale - 1.0f);
+            g_LW = (int)(restW + extra + (g_base + g_gap) + 4 * g_margin);
+            if (g_LW <= limit || g_base <= 20 * d)
+                break;
+            g_base -= 1.0f;
+        }
+        float labelExt = vert ? LABEL_W_VERT * d : LABEL_H * d;
+        g_LH = (int)(g_margin + g_pady + g_maxScale * g_base + g_bounce + labelExt + 4);
+        g_W = vert ? g_LH : g_LW;
+        g_H = vert ? g_LW : g_LH;
+
+        g_barV0 = g_margin;
+        g_barV1 = g_margin + g_base + 2 * g_pady;
+        g_baseline = g_margin + g_pady;
+        g_hoverV = g_baseline + g_maxScale * g_base + 6 * d;
+        g_hideDelta = g_barV1 - 4 * d; /* 隠れた時はバーの端4pxだけ見せる */
+    }
 
     float start = (float)(vert ? wa.top : wa.left);
     int along = (int)(start + g_frac * len - g_LW * 0.5f);
@@ -1092,6 +1188,8 @@ static void Layout(void)
     {
         g_items[i].sz = sz[i];
         g_items[i].cx = x + cx[i];
+        if (IsCircle()) /* cx は弧の長さ (中心 = g_LW/2)。基準半径での弧長から角度を求める */
+            g_items[i].ang = HALF_PI - (g_items[i].cx - g_LW * 0.5f) / g_Rref;
     }
 }
 
@@ -1103,6 +1201,7 @@ static BOOL Step(void)
     float c[MAX_ITEMS], s[MAX_ITEMS];
     float total = LayoutPass(c, s, 1, 1);
     float off = (g_LW - total) * 0.5f;
+    float mu = MouseAlong();
 
     for (int i = 0; i < g_count; i++)
     {
@@ -1113,7 +1212,7 @@ static BOOL Step(void)
         else if (g_hover && !g_dragged && !g_dropActive)
         {
             /* マウス直下を最大に、距離に応じてガウス状に周辺も拡大 */
-            float dx = g_mouseU - (off + c[i]);
+            float dx = mu - (off + c[i]);
             target = 1.0f + (g_maxScale - 1.0f) * expf(-(dx * dx) / (2 * sigma * sigma));
         }
         float diff = target - it->scale;
@@ -1159,6 +1258,22 @@ static BOOL Step(void)
 
 static int HitTest(float u, float v)
 {
+    if (IsCircle())
+    { /* 帯の外周より内側で、マウスの角度にある項目 */
+        float dx = u - g_cU, dy = v - g_cV;
+        float rho = sqrtf(dx * dx + dy * dy);
+        if (dy < 0.0f || rho > g_hoverV || rho < g_ro0 - 6.0f * g_dpi)
+            return -1;
+        float a = g_LW * 0.5f + (HALF_PI - atan2f(dy, dx)) * g_Rref;
+        for (int i = 0; i < g_count; i++)
+        {
+            float l = g_items[i].cx - g_items[i].sz * 0.5f - g_gap * 0.5f;
+            float r = g_items[i].cx + g_items[i].sz * 0.5f + g_gap * 0.5f;
+            if (a >= l && a < r)
+                return i;
+        }
+        return -1;
+    }
     if (v > g_hoverV)
         return -1;
     for (int i = 0; i < g_count; i++)
@@ -1255,6 +1370,19 @@ static float LiftOf(const Item *it, DWORD now)
     float t = (float)(now - it->bounceStart) / BOUNCE_MS;
     float v = sinf(t * 4.0f * 3.14159265f) * (1.0f - t);
     return v >= 0.0f ? g_bounce * v : g_bounce * 0.3f * v;
+}
+
+/* 項目の中心 (論理座標)。バー: 端に沿った位置 / サークル: 円弧上の角度と半径。バウンスは外向きに持ち上がる */
+static void ItemCenterUV(const Item *it, DWORD now, float *u, float *v)
+{
+    float lift = LiftOf(it, now);
+    if (IsCircle())
+        PolarUV(g_baseline + it->sz * 0.5f + lift, it->ang, u, v);
+    else
+    {
+        *u = it->cx;
+        *v = g_baseline + it->sz * 0.5f + lift;
+    }
 }
 
 /* 汎用パネル: 影/グロー + グラデーション塗り + 光沢 + 縁ハイライト + 枠線 を1パスで描く。
@@ -1374,6 +1502,109 @@ static void DrawPanel(float u0, float v0, float u1, float v1, float rad, const T
                   ((uint32_t)(og + 0.5f) << 8) | (uint32_t)(ob + 0.5f);
         }
 }
+
+/* サークル用パネル: DrawPanel と同じ見た目 (影/塗り/光沢/縁ハイライト/枠線) を、円弧に沿って曲げた角丸の帯に描く。
+ *   s0..s1 : 弧の範囲 (基準半径 g_Rref での弧長。真上が0) / ro0..ro1 : 帯の内径・外径 (中心からの半径)
+ *   pass   : 1=影だけ 2=本体だけ 3=両方 */
+static void DrawArcPanel(float s0, float s1, float ro0, float ro1, float rad, const Theme *t, float aMul, int pass)
+{
+    float d = g_dpi;
+    float blur = (pass & 1) ? t->shBlur * d : 0.0f;
+    float ext = blur + 3.0f;
+    float hs = (s1 - s0) * 0.5f, sc = (s0 + s1) * 0.5f;
+    float rc = (ro0 + ro1) * 0.5f, hh = (ro1 - ro0) * 0.5f;
+    float rin = fmaxf(ro0 - ext, 0.0f), rout = ro1 + ext;
+    float rin2 = rin * rin, rout2 = rout * rout;
+    float bw = t->bw * d;
+    float lt = fmaxf(ro1 - ro0, 1.0f), ls = fmaxf(s1 - s0, 1.0f);
+    float fa0 = fminf(t->f0.a * aMul, 1.0f), fa1 = fminf(t->f1.a * aMul, 1.0f);
+
+    float L, T, R, B;
+    LRect(g_cU - rout, g_cV - ext - hh, g_cU + rout, g_cV + rout, &L, &T, &R, &B);
+    int x0 = ClampI((int)L, 0, g_W), x1 = ClampI((int)R + 1, 0, g_W);
+    int y0 = ClampI((int)T, 0, g_H), y1 = ClampI((int)B + 1, 0, g_H);
+
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float u, v;
+            W2L(x + 0.5f, y + 0.5f, &u, &v);
+            float dx = u - g_cU, dy = v - g_cV;
+            float r2 = dx * dx + dy * dy;
+            if (r2 < rin2 || r2 > rout2)
+                continue;
+            float rho = sqrtf(r2);
+            float s = (HALF_PI - atan2f(dy, dx)) * g_Rref;
+            float qx = fabsf(s - sc) - hs + rad, qy = fabsf(rho - rc) - hh + rad;
+            float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f);
+            float dist = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0.0f) - rad; /* 曲げた角丸矩形SDF */
+            if (dist > blur + 1.0f)
+                continue;
+
+            float pr = 0.0f, pg = 0.0f, pb = 0.0f, pa = 0.0f;
+
+            if (blur > 0.0f && t->sh.a > 0.0f)
+            {
+                float cov = Clamp01(dist + 0.5f);
+                float k = Clamp01(1.0f - fmaxf(dist, 0.0f) / blur);
+                OVER(t->sh.r, t->sh.g, t->sh.b, t->sh.a * k * k * cov);
+            }
+
+            if (pass & 2)
+            {
+                float outer = Clamp01(0.5f - dist);
+                if (outer > 0.0f)
+                {
+                    float tv = Clamp01((rho - ro0) / lt), tu = Clamp01((s - s0) / ls);
+                    float g = t->alongU ? tu : tv; /* tv: 内側(端側)0 -> 外側1 */
+
+                    float fr = Lerpf(t->f0.r, t->f1.r, g);
+                    float fgc = Lerpf(t->f0.g, t->f1.g, g);
+                    float fb = Lerpf(t->f0.b, t->f1.b, g);
+                    OVER(fr, fgc, fb, Lerpf(fa0, fa1, g) * outer);
+
+                    if (t->shine > 0.0f)
+                    {
+                        float sa = t->shine * Clamp01((tv - 0.35f) / 0.65f);
+                        OVER(255.0f, 255.0f, 255.0f, sa * outer);
+                    }
+                    if (t->rim > 0.0f)
+                    {
+                        float rcv = Clamp01(0.5f * d + 0.5f - fabsf(dist + bw + 0.5f * d));
+                        float w = Clamp01((tv - 0.55f) / 0.45f);
+                        OVER(255.0f, 255.0f, 255.0f, t->rim * rcv * w * outer);
+                    }
+                    if (bw > 0.0f)
+                    {
+                        float bc = Clamp01(0.5f - dist) - Clamp01(0.5f - (dist + bw));
+                        if (bc > 0.0f)
+                            OVER(Lerpf(t->b0.r, t->b1.r, g), Lerpf(t->b0.g, t->b1.g, g), Lerpf(t->b0.b, t->b1.b, g),
+                                 Lerpf(t->b0.a, t->b1.a, g) * bc);
+                    }
+                }
+            }
+
+            if (pa <= 0.0f)
+                continue;
+            uint32_t *dp = &g_bits[y * g_W + x];
+            uint32_t dv = *dp;
+            float inv = 1.0f - pa;
+            float oa = pa * 255.0f + ((dv >> 24) & 255) * inv;
+            float orr = pr + ((dv >> 16) & 255) * inv;
+            float og = pg + ((dv >> 8) & 255) * inv;
+            float ob = pb + (dv & 255) * inv;
+            if (oa > 255.0f)
+                oa = 255.0f;
+            if (orr > oa)
+                orr = oa;
+            if (og > oa)
+                og = oa;
+            if (ob > oa)
+                ob = oa;
+            *dp = ((uint32_t)(oa + 0.5f) << 24) | ((uint32_t)(orr + 0.5f) << 16) |
+                  ((uint32_t)(og + 0.5f) << 8) | (uint32_t)(ob + 0.5f);
+        }
+}
 #undef OVER
 
 /* モダン用: アイコンごとのタイル。ホバーで少し明るく、前面のアプリは枠をアクセント色に */
@@ -1383,10 +1614,11 @@ static void DrawTile(const Item *it, DWORD now, int pass)
         return;
     const Theme *t = Th();
     float half = it->sz * 0.5f;
-    float vc = g_baseline + half + LiftOf(it, now);
+    float uc, vc;
+    ItemCenterUV(it, now, &uc, &vc);
     float hot = (g_maxScale > 1.001f) ? Clamp01((it->scale - 1.0f) / (g_maxScale - 1.0f)) : 0.0f;
     static const Col acc = {96.0f, 165.0f, 255.0f, 0.85f};
-    DrawPanel(it->cx - half, vc - half, it->cx + half, vc + half, it->sz * 0.26f, t,
+    DrawPanel(uc - half, vc - half, uc + half, vc + half, it->sz * 0.26f, t,
               OpacityMul(), hot, (it->fg && it->nwin > 0) ? &acc : NULL, pass);
 }
 
@@ -1395,8 +1627,9 @@ static void DrawItem(const Item *it, DWORD now)
     int dw = (int)(it->sz * Th()->iconScale + 0.5f);
     if (dw < 4)
         return;
-    float xc, yc;
-    L2W(it->cx, g_baseline + it->sz * 0.5f + LiftOf(it, now), &xc, &yc);
+    float uc, vc, xc, yc;
+    ItemCenterUV(it, now, &uc, &vc);
+    L2W(uc, vc, &xc, &yc);
     int dx0 = (int)floorf(xc - dw * 0.5f + 0.5f);
     int dy0 = (int)floorf(yc - dw * 0.5f + 0.5f);
 
@@ -1463,25 +1696,24 @@ static BOOL AnyPending(void)
     return FALSE;
 }
 
-/* ピル (カプセル) 状の目印。軸方向に len、厚み th */
-static void DrawCapsule(float cx, float cy, float len, float th, const Col *c)
+/* ピル (カプセル) 状の目印。長さ len、厚み th、向き (ax, ay) はウィンドウ座標の単位ベクトル */
+static void DrawCapsule(float cx, float cy, float len, float th, float ax, float ay, const Col *c)
 {
-    BOOL vert = IsVert();
     float hl = fmaxf(len * 0.5f - th * 0.5f, 0.0f);
-    float ex = (vert ? th : len) * 0.5f + 2.0f, ey = (vert ? len : th) * 0.5f + 2.0f;
-    int x0 = (int)(cx - ex), x1 = (int)(cx + ex) + 1, y0 = (int)(cy - ey), y1 = (int)(cy + ey) + 1;
+    float e = fmaxf(len, th) * 0.5f + 2.0f;
+    int x0 = (int)(cx - e), x1 = (int)(cx + e) + 1, y0 = (int)(cy - e), y1 = (int)(cy + e) + 1;
     for (int y = y0; y < y1; y++)
         for (int x = x0; x < x1; x++)
         {
             float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
-            float al = vert ? dy : dx, pe = vert ? dx : dy;
+            float al = dx * ax + dy * ay, pe = -dx * ay + dy * ax;
             float a = fmaxf(fabsf(al) - hl, 0.0f);
             float cov = Clamp01(0.5f - (sqrtf(a * a + pe * pe) - th * 0.5f));
             BlendPx(x, y, c->r, c->g, c->b, cov * c->a);
         }
 }
 
-/* 起動中のアプリ: アイコンの画面端側に目印を1つ (形はテーマごと) */
+/* 起動中のアプリ: アイコンの画面端側 (サークルでは内側) に目印を1つ (形はテーマごと) */
 static void DrawIndicator(const Item *it)
 {
     if (it->nwin <= 0 && !IsPending(it))
@@ -1491,11 +1723,18 @@ static void DrawIndicator(const Item *it)
     float d = g_dpi, x, y;
     if (t->ind == 1)
     { /* ピル: 前面のアプリは長く */
-        L2W(it->cx, g_margin + g_pady * 0.42f, &x, &y);
-        DrawCapsule(x, y, ((it->fg && it->nwin > 0) ? 16.0f : 6.0f) * d, 3.2f * d, c);
+        float ax = IsVert() ? 0.0f : 1.0f, ay = IsVert() ? 1.0f : 0.0f;
+        if (IsCircle())
+            PolarW(g_ro0 + g_pady * 0.42f, it->ang, &x, &y, &ax, &ay); /* 円弧の接線方向に寝かせる */
+        else
+            L2W(it->cx, g_margin + g_pady * 0.42f, &x, &y);
+        DrawCapsule(x, y, ((it->fg && it->nwin > 0) ? 16.0f : 6.0f) * d, 3.2f * d, ax, ay, c);
         return;
     }
-    L2W(it->cx, g_margin + g_pady * 0.38f, &x, &y);
+    if (IsCircle())
+        PolarW(g_ro0 + g_pady * 0.38f, it->ang, &x, &y, NULL, NULL);
+    else
+        L2W(it->cx, g_margin + g_pady * 0.38f, &x, &y);
     float r = t->indR * d;
     if (t->halo)
         DrawDot(x, y, r + 0.9f * d, 0.f, 0.f, 0.f, 0.22f);
@@ -1515,6 +1754,15 @@ static void DrawDivider(void)
     if (t->divider <= 0.0f || t->tiles || np <= 0 || np >= g_count)
         return;
     const Item *a = &g_items[np - 1], *b = &g_items[np];
+    if (IsCircle())
+    { /* 弧の途中に、半径方向の細い線 */
+        float s = ((a->cx + a->sz * 0.5f) + (b->cx - b->sz * 0.5f)) * 0.5f - g_LW * 0.5f;
+        float px, py, tx, ty;
+        PolarW(g_baseline + g_base * 0.5f, HALF_PI - s / g_Rref, &px, &py, &tx, &ty);
+        Col dc = {255.0f, 255.0f, 255.0f, t->divider};
+        DrawCapsule(px, py, g_base * 0.76f, ceilf(g_dpi), -ty, tx, &dc); /* 接線に直交 = 半径方向 */
+        return;
+    }
     float u = ((a->cx + a->sz * 0.5f) + (b->cx - b->sz * 0.5f)) * 0.5f;
     float v0 = g_baseline + g_base * 0.12f, v1 = g_baseline + g_base * 0.88f;
     float xa, ya, xb, yb;
@@ -1595,32 +1843,46 @@ static void DrawLabel(const Item *it, DWORD now)
     BuildLabel(it->name);
     float d = g_dpi;
     float pw = g_lblW + 20 * d, ph = g_lblH + 10 * d;
-    float vo = g_baseline + it->sz + LiftOf(it, now) + 8 * d; /* アイコン先端の外側 */
-    float u0, u1, v0, v1;
-    if (!IsVert())
-    { /* 横置き: アイコンの外側(上/下)に中央揃え */
-        u0 = it->cx - pw * 0.5f;
-        if (u0 > g_LW - pw - 2)
-            u0 = g_LW - pw - 2;
-        if (u0 < 2)
-            u0 = 2;
-        u1 = u0 + pw;
-        v0 = vo;
-        v1 = vo + ph;
+    float L, T, R, B;
+    if (IsCircle())
+    { /* サークル: 円の内側の空きに表示 */
+        float xc, yc;
+        L2W(g_cU, g_cV + g_ro0 * 0.45f, &xc, &yc);
+        L = xc - pw * 0.5f;
+        T = yc - ph * 0.5f;
+        L = fminf(fmaxf(L, 2.0f), fmaxf(g_W - pw - 2.0f, 2.0f));
+        T = fminf(fmaxf(T, 2.0f), fmaxf(g_H - ph - 2.0f, 2.0f));
+        R = L + pw;
+        B = T + ph;
     }
     else
-    { /* 縦置き: アイコンの外側(右/左)に縦中央揃え */
-        u0 = it->cx - ph * 0.5f;
-        if (u0 > g_LW - ph - 2)
-            u0 = g_LW - ph - 2;
-        if (u0 < 2)
-            u0 = 2;
-        u1 = u0 + ph;
-        v0 = vo;
-        v1 = vo + pw;
+    {
+        float vo = g_baseline + it->sz + LiftOf(it, now) + 8 * d; /* アイコン先端の外側 */
+        float u0, u1, v0, v1;
+        if (!IsVert())
+        { /* 横置き: アイコンの外側(上/下)に中央揃え */
+            u0 = it->cx - pw * 0.5f;
+            if (u0 > g_LW - pw - 2)
+                u0 = g_LW - pw - 2;
+            if (u0 < 2)
+                u0 = 2;
+            u1 = u0 + pw;
+            v0 = vo;
+            v1 = vo + ph;
+        }
+        else
+        { /* 縦置き: アイコンの外側(右/左)に縦中央揃え */
+            u0 = it->cx - ph * 0.5f;
+            if (u0 > g_LW - ph - 2)
+                u0 = g_LW - ph - 2;
+            if (u0 < 2)
+                u0 = 2;
+            u1 = u0 + ph;
+            v0 = vo;
+            v1 = vo + pw;
+        }
+        LRect(u0, v0, u1, v1, &L, &T, &R, &B);
     }
-    float L, T, R, B;
-    LRect(u0, v0, u1, v1, &L, &T, &R, &B);
     DrawRRect(L, T, R, B, ph * Th()->labelRad, &Th()->label);
 
     const Col *lt = &Th()->labelTxt;
@@ -1641,12 +1903,29 @@ static void Render(void)
 
     /* アルファ1のほぼ透明領域: 0だとマウスが貫通するためホバー検知用に塗る */
     float L, T, R, B;
-    LRect(0, 0, (float)g_LW, g_hoverV, &L, &T, &R, &B);
-    int hx0 = ClampI((int)floorf(L), 0, g_W), hx1 = ClampI((int)ceilf(R), 0, g_W);
-    int hy0 = ClampI((int)floorf(T), 0, g_H), hy1 = ClampI((int)ceilf(B), 0, g_H);
-    for (int y = hy0; y < hy1; y++)
-        for (int x = hx0; x < hx1; x++)
-            g_bits[y * g_W + x] = 0x01000000u;
+    if (IsCircle())
+    { /* サークル: 帯とその外側 (半円の環) だけをホバー領域にする。円の内側の空きは下のウィンドウを操作できるよう貫通させる */
+        float hr2 = g_hoverV * g_hoverV, lr = g_ro0 - 8.0f * g_dpi;
+        float lr2 = lr > 0.0f ? lr * lr : 0.0f;
+        for (int y = 0; y < g_H; y++)
+            for (int x = 0; x < g_W; x++)
+            {
+                float u, v;
+                W2L(x + 0.5f, y + 0.5f, &u, &v);
+                float dx = u - g_cU, dy = v - g_cV, r2 = dx * dx + dy * dy;
+                if (dy >= 0.0f && r2 >= lr2 && r2 <= hr2)
+                    g_bits[y * g_W + x] = 0x01000000u;
+            }
+    }
+    else
+    {
+        LRect(0, 0, (float)g_LW, g_hoverV, &L, &T, &R, &B);
+        int hx0 = ClampI((int)floorf(L), 0, g_W), hx1 = ClampI((int)ceilf(R), 0, g_W);
+        int hy0 = ClampI((int)floorf(T), 0, g_H), hy1 = ClampI((int)ceilf(B), 0, g_H);
+        for (int y = hy0; y < hy1; y++)
+            for (int x = hx0; x < hx1; x++)
+                g_bits[y * g_W + x] = 0x01000000u;
+    }
 
     const Theme *th = Th();
     DWORD now = GetTickCount();
@@ -1657,6 +1936,11 @@ static void Render(void)
     { /* タイル: 影を先にまとめて描き、隣のタイルに影が被らないようにする */
         for (int i = 0; i < g_count; i++)
             DrawTile(&g_items[i], now, 1);
+    }
+    else if (IsCircle())
+    { /* サークル: 全デザイン共通で、円弧に沿った帯に描く (標準もここ。見た目は従来のバーと同じ配色) */
+        DrawArcPanel(g_barL - g_LW * 0.5f, g_barR - g_LW * 0.5f, g_barV0, g_barV1, r, th, OpacityMul(), 3);
+        DrawDivider();
     }
     else if (g_style == 0)
     { /* クラシック: 従来どおり */
@@ -1837,9 +2121,13 @@ static void ShowContextMenu(HWND hwnd, int hit)
         swprintf(b, 32, L"%d.%d 秒", g_hideChoices[i] / 1000, (g_hideChoices[i] % 1000) / 100);
         AppendMenuW(mt, MF_STRING | (g_hideMs == g_hideChoices[i] ? MF_CHECKED : 0), 20 + i, b);
     }
+    HMENU mk = CreatePopupMenu();
+    for (int i = 0; i < N_DOCKTYPES; i++)
+        AppendMenuW(mk, MF_STRING | (g_dockType == i ? MF_CHECKED : 0), 50 + i, g_dockTypeNames[i]);
     HMENU ms = CreatePopupMenu();
     for (int i = 0; i < N_STYLES; i++)
         AppendMenuW(ms, MF_STRING | (g_style == i ? MF_CHECKED : 0), 40 + i, g_themes[i].name);
+    AppendMenuW(set, MF_POPUP, (UINT_PTR)mk, L"ドックの形");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)ms, L"デザイン");
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mo, L"向き");
@@ -1945,6 +2233,11 @@ static void ShowContextMenu(HWND hwnd, int hit)
             g_hideMs = g_hideChoices[cmd - 20];
             SaveConfig();
         }
+        else if (cmd >= 50 && cmd < 50 + N_DOCKTYPES)
+        {
+            g_dockType = cmd - 50;
+            ApplyLayoutChange();
+        }
         else if (cmd >= 40 && cmd < 40 + N_STYLES)
         {
             g_style = cmd - 40;
@@ -2012,12 +2305,13 @@ static void CreateGhost(int idx)
 
     /* 描画プリミティブがグローバルのバッファを使うので、一時的に差し替える */
     uint32_t *sb = g_bits;
-    int sW = g_W, sH = g_H, sEdge = g_edge;
+    int sW = g_W, sH = g_H, sEdge = g_edge, sType = g_dockType;
     float sBase = g_baseline;
     g_bits = g_ghostBits;
     g_W = gw;
     g_H = gh;
     g_edge = 0;
+    g_dockType = 0; /* ゴーストは常に水平配置で描く */
 
     float L = (gw - pw) * 0.5f;
     DrawRRect(L, 4, L + pw, 4 + ph, ph * 0.5f, &g_labelStyle);
@@ -2040,6 +2334,7 @@ static void CreateGhost(int idx)
     g_W = sW;
     g_H = sH;
     g_edge = sEdge;
+    g_dockType = sType;
     g_baseline = sBase;
 
     g_ghostAX = gw / 2;
@@ -2088,7 +2383,7 @@ static void DropUpdate(POINTL pt)
     float off = (g_LW - total) * 0.5f;
     int np = NPinned(), k = 0;
     for (int i = 0; i < np; i++)
-        if (off + c[i] < g_mouseU)
+        if (off + c[i] < MouseAlong())
             k++;
     g_dropIdx = k;
     EnsureTimer();
@@ -2275,7 +2570,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if ((wp & MK_LBUTTON) && g_pressed >= 0 && g_items[g_pressed].pinned && DragArmed(lp))
         {
             /* ドックの上方向へ大きく外れたら「引き出し中」(離すと削除) */
-            BOOL out = g_mouseV > g_barV1 + 40.0f * g_dpi;
+            BOOL out = OutsideDock();
             if (out && g_dragOut < 0)
             {
                 g_dragOut = g_pressed;
@@ -2569,6 +2864,15 @@ void Dock_SetStyle(int s)
     DockRelayout();
 }
 int Dock_StyleCount(void) { return N_STYLES; }
+
+int Dock_GetType(void) { return g_dockType; }
+void Dock_SetType(int t)
+{
+    g_dockType = ClampI(t, 0, N_DOCKTYPES - 1);
+    DockRelayout();
+}
+int Dock_TypeCount(void) { return N_DOCKTYPES; }
+const wchar_t *Dock_TypeName(int i) { return g_dockTypeNames[ClampI(i, 0, N_DOCKTYPES - 1)]; }
 const wchar_t *Dock_StyleName(int i) { return g_themes[ClampI(i, 0, N_STYLES - 1)].name; }
 
 /* タスクトレイ/設定ウィンドウからの終了用 */

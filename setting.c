@@ -90,6 +90,10 @@ int Dock_GetStyle(void);
 void Dock_SetStyle(int s);
 int Dock_StyleCount(void);
 const wchar_t *Dock_StyleName(int i);
+int Dock_GetType(void);
+void Dock_SetType(int t);
+int Dock_TypeCount(void);
+const wchar_t *Dock_TypeName(int i);
 /* launcher.c */
 void Launcher_SetEnabled(BOOL on);
 void Launcher_SetStyle(int style, int edge);
@@ -190,6 +194,7 @@ enum
     W_SEG_LNSTYLE,
     W_SEG_LNEDGE,
     W_SEG_DKSTYLE, /* ドック: デザイン */
+    W_SEG_DKTYPE,  /* ドック: 形 (バー / サークル) */
     W_SL_HIDEMS,
     W_SL_ICON,
     W_SL_ZOOM,
@@ -1015,35 +1020,44 @@ static void PageDock(void)
     CardEnd();
 
     Section(L"外観");
-    CardBegin(RH * 4);
+    CardBegin(RH * 5);
     {
+        const wchar_t *tn[4];
+        int tc = Dock_TypeCount();
+        if (tc > 4)
+            tc = 4;
+        for (int i = 0; i < tc; i++)
+            tn[i] = Dock_TypeName(i);
+        RowText(0, RH, L"ドックの形", L"バー: 従来の横長のドック / サークル: 画面の端を中心に半円状に並べます", 250, on);
+        Segmented(W_SEG_DKTYPE, RightX(240), RowTop(0, RH) + (RH - 34) / 2, 240, tn, tc, Dock_GetType(), on);
+
         const wchar_t *dn[8];
         int dc = Dock_StyleCount();
         if (dc > 8)
             dc = 8;
         for (int i = 0; i < dc; i++)
             dn[i] = Dock_StyleName(i);
-        RowText(0, RH, L"デザイン", L"", 466, on);
-        Segmented(W_SEG_DKSTYLE, RightX(460), RowTop(0, RH) + (RH - 34) / 2, 460, dn, dc, Dock_GetStyle(), on);
+        RowText(1, RH, L"デザイン", L"バー・サークルのどちらにも適用されます", 466, on);
+        Segmented(W_SEG_DKSTYLE, RightX(460), RowTop(1, RH) + (RH - 34) / 2, 460, dn, dc, Dock_GetStyle(), on);
 
         wchar_t lb[24];
         int v = Dock_GetIconSize();
         _snwprintf(lb, 24, L"%d px", v);
         lb[23] = 0;
-        RowText(1, RH, L"アイコンのサイズ", L"ドックに並ぶアイコンの大きさ", 290, on);
-        Slider(W_SL_ICON, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(2, RH, L"アイコンのサイズ", L"ドックに並ぶアイコンの大きさ", 290, on);
+        Slider(W_SL_ICON, RightX(280), RowTop(2, RH) + (RH - 32) / 2, 280, v, lb, on);
 
         v = Dock_GetZoom();
         _snwprintf(lb, 24, L"%d %%", v);
         lb[23] = 0;
-        RowText(2, RH, L"ホバー時の拡大率", L"100% にすると拡大しません", 290, on);
-        Slider(W_SL_ZOOM, RightX(280), RowTop(2, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(3, RH, L"ホバー時の拡大率", L"100% にすると拡大しません", 290, on);
+        Slider(W_SL_ZOOM, RightX(280), RowTop(3, RH) + (RH - 32) / 2, 280, v, lb, on);
 
         v = Dock_GetOpacity();
         _snwprintf(lb, 24, L"%d %%", v);
         lb[23] = 0;
-        RowText(3, RH, L"背景の濃さ", L"小さいほど背景が透けます", 290, on);
-        Slider(W_SL_OPACITY, RightX(280), RowTop(3, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(4, RH, L"背景の濃さ", L"小さいほど背景が透けます", 290, on);
+        Slider(W_SL_OPACITY, RightX(280), RowTop(4, RH) + (RH - 32) / 2, 280, v, lb, on);
     }
     CardEnd();
     Hint(L"アプリの追加はファイルやフォルダをドックへドラッグ&ドロップ、削除はドックの外へドラッグするか右クリックから行います。");
@@ -1708,6 +1722,11 @@ static void Activate(HWND hwnd, const Hit *h)
         Dock_SaveSettings();
         Redraw();
         break;
+    case W_SEG_DKTYPE:
+        Dock_SetType(h->arg);
+        Dock_SaveSettings();
+        Redraw();
+        break;
     case W_SEG_LNSTYLE:
         g_lnStyle = h->arg;
         if (!g_first)
@@ -2137,9 +2156,9 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
             }
             else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE ||
-                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE)
+                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE)
             {
-                int n = h->id == W_SEG_DKSTYLE ? Dock_StyleCount() : h->id == W_SEG_THEME ? 3
+                int n = h->id == W_SEG_DKTYPE ? Dock_TypeCount() : h->id == W_SEG_DKSTYLE ? Dock_StyleCount() : h->id == W_SEG_THEME ? 3
                                                                                           : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
                 int a = ClampInt(h->arg + d, 0, n - 1);
                 Hit copy = *h;

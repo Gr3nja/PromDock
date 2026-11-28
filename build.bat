@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  PromDock build script (MSVC)
-rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c を1つのexeに)
+rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c + photoframe.c + clock.c を1つのexeに)
 rem    build.bat run    : build and launch
 rem
 rem  Works in any of these situations:
@@ -34,6 +34,16 @@ if not exist "setting.c" (
 )
 if not exist "searchbar.c" (
     echo [ERROR] searchbar.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "photoframe.c" (
+    echo [ERROR] photoframe.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "clock.c" (
+    echo [ERROR] clock.c not found next to build.bat.
     set "RC=1"
     goto :done
 )
@@ -76,7 +86,7 @@ if not exist build mkdir build
 rem --- a running PromDock locks the exe, so close it first ---
 taskkill /f /im PromDock.exe >nul 2>nul
 
-rem --- ああああ ---
+rem --- promdock.ico (build.bat と同じフォルダ) があれば exe に埋め込む ---
 set "RES="
 if exist "promdock.ico" if exist "promdock.rc" (
     rc /nologo /fo build\promdock.res promdock.rc
@@ -91,7 +101,7 @@ if exist "promdock.ico" if exist "promdock.rc" (
 )
 
 echo Building PromDock ...
-cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c %RES% /link /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c photoframe.c clock.c %RES% /link /SUBSYSTEM:WINDOWS
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed.
@@ -119,4 +129,4 @@ exit /b
 rem  :scanroot  <ProgramFiles dir>  -> sets VCVARS from common paths (newest first)
 :scanroot
 for %%Y in (18 2026 2022 2019 2017) do for %%E in (Enterprise Professional Community BuildTools Preview) do if not defined VCVARS if exist "%~1\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%~1\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvars64.bat"
-exit /b 
+exit /b

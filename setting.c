@@ -1,12 +1,12 @@
 /*
  * setting.c - PromDock のアプリ設定 (promdock.c / launcher.c / searchbar.c と同じ exe にビルド)
  *
- *   左のサイドバーで「全般 / ドック / ランチャー / 検索バー」を切り替えるモダンな設定画面。
+ *   左のサイドバーで「全般 / ドック / ランチャー / 検索バー / 画像・GIF追加 / 時計」を切り替えるモダンな設定画面。
  *   部品 (トグル・セグメント・スライダー・ステッパー・ドロップダウン・ボタン) はすべて自前で描画します。
  *   配色は Windows のライト/ダークに自動で合わせます (全般 > テーマ で固定も可能)。
  *
  *   - 初回起動時: 最初に設定ウィンドウを開き、使う機能を選んで「開始」を押すと起動する
- *   - 2回目以降: タスクトレイのアイコン / ドック・ランチャー・検索バーの右クリックから開く
+ *   - 2回目以降: タスクトレイのアイコン / ドック・ランチャー・検索バー・画像・時計の右クリックから開く
  *       (どの機能から開いたかで、その機能のページが最初に表示される)
  *   - 動作中に PromDock.exe をもう一度起動すると、動作中のアプリの設定ウィンドウが開く
  *   - 初回以降の変更は「すぐに反映・保存」されます (OK ボタンは不要)
@@ -17,6 +17,8 @@
  *                 アイコンサイズ / ホバー時の拡大率 / 背景の濃さ            (保存先: promdock.txt)
  *     ランチャー: ショートカットキー / 表示スタイル (通常・画面端に隠す) と端 / 列数・行数 (保存先: launcher.txt)
  *     検索バー  : ブラウザと検索エンジンを選んで追加・削除 / 位置の移動        (保存先: searchbar.ini)
+ *     画像・GIF追加: 画像・GIF と大きさを選んで追加・削除 / 大きさの変更 / ドラッグ移動の許可 (保存先: photoframe.ini)
+ *     時計      : デスクトップの時計 (デジタル/アナログ・デザイン・24時間・秒・日付・大きさ・背景の濃さ・位置)  (保存先: clock.ini)
  *
  *   - アプリ全体の設定は exe と同じフォルダの settings.ini に保存
  *       [PromDock]
@@ -31,9 +33,11 @@
  *     Settings_DockEnabled()      ... ドックが有効か
  *     Settings_LauncherEnabled()  ... ランチャーが有効か
  *     Settings_Open()             ... 設定ウィンドウを開く (最後に見ていたページ)
- *     Settings_OpenPage(page)     ... 指定ページで開く (0:全般 1:ドック 2:ランチャー 3:検索バー)
+ *     Settings_OpenPage(page)     ... 指定ページで開く (0:全般 1:ドック 2:ランチャー 3:検索バー 4:画像・GIF追加 5:時計)
  *     Settings_PreTranslate(msg)  ... メッセージループで TranslateMessage の前に呼ぶ
  *     Settings_RefreshSearchBar() ... 検索バーの一覧・ボタン表示を更新 (searchbar.c から呼ばれる)
+ *     Settings_RefreshPhotoFrame() ... 画像・GIF追加の一覧・ボタン表示を更新 (photoframe.c から呼ばれる)
+ *     Settings_RefreshClock()      ... 時計ページの表示を更新 (clock.c から呼ばれる)
  *     Settings_Shutdown()         ... 終了時に1回
  */
 #define _CRT_SECURE_NO_WARNINGS
@@ -82,6 +86,10 @@ int Dock_GetZoom(void);
 void Dock_SetZoom(int pct);
 int Dock_GetOpacity(void);
 void Dock_SetOpacity(int pct);
+int Dock_GetStyle(void);
+void Dock_SetStyle(int s);
+int Dock_StyleCount(void);
+const wchar_t *Dock_StyleName(int i);
 /* launcher.c */
 void Launcher_SetEnabled(BOOL on);
 void Launcher_SetStyle(int style, int edge);
@@ -102,6 +110,39 @@ BOOL SearchBar_Add(int browser, int engine);
 void SearchBar_Remove(int index);
 BOOL SearchBar_MoveMode(void);
 void SearchBar_SetMoveMode(BOOL on);
+/* photoframe.c (デスクトップに置ける画像・GIF) */
+int PhotoFrame_Count(void);
+int PhotoFrame_Limit(void);
+void PhotoFrame_Name(int i, wchar_t *out, int cch);
+void PhotoFrame_Info(int i, wchar_t *out, int cch);
+BOOL PhotoFrame_Add(const wchar_t *path, int size);
+void PhotoFrame_Remove(int index);
+int PhotoFrame_GetSize(int i);
+void PhotoFrame_SetSize(int i, int size);
+BOOL PhotoFrame_Movable(void);
+void PhotoFrame_SetMovable(BOOL on);
+BOOL PhotoFrame_PickFile(HWND owner, wchar_t *out, int cch);
+/* clock.c (デスクトップ時計) */
+BOOL Clock_Enabled(void);
+void Clock_SetEnabled(BOOL on);
+int Clock_GetStyle(void);
+void Clock_SetStyle(int style);
+int Clock_GetVariant(void);
+void Clock_SetVariant(int v);
+int Clock_VariantCount(int style);
+BOOL Clock_Get24h(void);
+void Clock_Set24h(BOOL on);
+BOOL Clock_GetSeconds(void);
+void Clock_SetSeconds(BOOL on);
+BOOL Clock_GetDate(void);
+void Clock_SetDate(BOOL on);
+int Clock_GetSize(void);
+void Clock_SetSize(int pct);
+int Clock_GetOpacity(void);
+void Clock_SetOpacity(int pct);
+BOOL Clock_Movable(void);
+void Clock_SetMovable(BOOL on);
+void Clock_ResetPosition(void);
 
 /* このファイルが公開する関数 */
 BOOL Settings_Init(HINSTANCE hInst);
@@ -114,6 +155,8 @@ int Settings_LauncherEdge(void);
 BOOL Settings_PreTranslate(MSG *m);
 void Settings_Shutdown(void);
 void Settings_RefreshSearchBar(void);
+void Settings_RefreshPhotoFrame(void);
+void Settings_RefreshClock(void);
 
 #define WM_TRAY (WM_APP + 10)
 #define WM_SHOWSETTINGS (WM_APP + 11)
@@ -146,10 +189,14 @@ enum
     W_SEG_EDGE,
     W_SEG_LNSTYLE,
     W_SEG_LNEDGE,
+    W_SEG_DKSTYLE, /* ドック: デザイン */
     W_SL_HIDEMS,
     W_SL_ICON,
     W_SL_ZOOM,
     W_SL_OPACITY,
+    W_SL_PFSIZE, /* 画像・GIF追加: 追加するときの大きさ (W_SL_OPACITY の直後に置くこと: スライダーの範囲判定に使う) */
+    W_SL_CLSIZE, /* 時計: 大きさ */
+    W_SL_CLOPA,  /* 時計: 背景の濃さ (スライダーはここまで) */
     W_STP_COLS,
     W_STP_ROWS,
     W_DD_HOTKEY,
@@ -161,6 +208,18 @@ enum
     W_BTN_ADD,
     W_BTN_MOVE,
     W_BTN_DEL,
+    W_TG_PFMOVE,
+    W_STP_PFSIZE,
+    W_BTN_PFADD,
+    W_BTN_PFDEL,
+    W_SEG_CLSTYLE,
+    W_SEG_CLVAR, /* 時計: デザイン (スタイルごと) */
+    W_TG_CLOCK,
+    W_TG_CL24,
+    W_TG_CLSEC,
+    W_TG_CLDATE,
+    W_TG_CLMOVE,
+    W_BTN_CLRESET,
     W_BTN_OK,
     W_BTN_EXIT,
     W_COUNT
@@ -172,6 +231,8 @@ enum
     PAGE_DOCK,
     PAGE_LAUNCHER,
     PAGE_SEARCH,
+    PAGE_PHOTO,
+    PAGE_CLOCK,
     PAGE_COUNT
 };
 
@@ -230,6 +291,7 @@ static int g_hoverId, g_hoverArg, g_pressId, g_pressArg, g_focusId, g_focusArg;
 static BOOL g_kbd, g_tracking, g_dragSlider;
 static int g_dragId;
 static int g_sbBrowser, g_sbEngine; /* 検索バー追加フォームの選択 */
+static int g_pfNewSize = 400;       /* 画像・GIF を追加するときの大きさ (長い辺 px) */
 static wchar_t g_notice[160];
 static DWORD g_noticeTick;
 static BOOL g_noticeWarn;
@@ -700,14 +762,14 @@ static void Dropdown(int id, int x, int y, int w, const wchar_t *text, BOOL en)
     AddHit(x, y, w, 34, id, 0, en, g_inContent, 9);
 }
 
-static void Stepper(int id, int x, int y, const wchar_t *text, BOOL en, BOOL canMinus, BOOL canPlus)
+static void StepperA(int id, int argBase, int x, int y, const wchar_t *text, BOOL en, BOOL canMinus, BOOL canPlus)
 {
     float a = en ? 1.0f : 0.45f;
     for (int i = 0; i < 2; i++)
     {
         int bx = i == 0 ? x : x + 36 + 76;
         BOOL ok = en && (i == 0 ? canMinus : canPlus);
-        BOOL hv = IsHover(id, i) && ok;
+        BOOL hv = IsHover(id, argBase + i) && ok;
         RR(bx, y, 36, 34, 9, hv ? g_pal->fieldHover : g_pal->field, en ? (ok ? 1.0f : 0.55f) : 0.45f);
         RRs(bx, y, 36, 34, 9, 1.0f, g_pal->border, 0.8f * a);
         float cx = bx + 18.0f, cy = y + 17.0f;
@@ -715,9 +777,14 @@ static void Stepper(int id, int x, int y, const wchar_t *text, BOOL en, BOOL can
         Ln(cx - 5, cy, cx + 5, cy, 1.8f, g_pal->text, ia);
         if (i == 1)
             Ln(cx, cy - 5, cx, cy + 5, 1.8f, g_pal->text, ia);
-        AddHit(bx, y, 36, 34, id, i, ok, g_inContent, 9);
+        AddHit(bx, y, 36, 34, id, argBase + i, ok, g_inContent, 9);
     }
     Txt(text, x + 36, y, 76, 34, g_fBtn, en ? g_pal->text : g_pal->sub, FL_C);
+}
+
+static void Stepper(int id, int x, int y, const wchar_t *text, BOOL en, BOOL canMinus, BOOL canPlus)
+{
+    StepperA(id, 0, x, y, text, en, canMinus, canPlus);
 }
 
 /* スライダー: 値の表示 + 左のトラック。範囲は SliderRange() で決まる */
@@ -733,6 +800,15 @@ static void SliderRange(int id, int *mn, int *mx, int *step)
         break;
     case W_SL_ZOOM:
         *mn = 100, *mx = 200, *step = 5;
+        break;
+    case W_SL_PFSIZE:
+        *mn = 100, *mx = 1200, *step = 20;
+        break;
+    case W_SL_CLSIZE:
+        *mn = 60, *mx = 200, *step = 10;
+        break;
+    case W_SL_CLOPA:
+        *mn = 30, *mx = 100, *step = 5;
         break;
     default: /* W_SL_OPACITY */
         *mn = 30, *mx = 100, *step = 5;
@@ -844,7 +920,7 @@ static void PageGeneral(void)
     }
 
     Section(L"機能");
-    CardBegin(RH * 3);
+    CardBegin(RH * 5);
     {
         RowText(0, RH, L"ドック", L"画面の端にアプリを並べて、ワンクリックで起動・切り替え", 150, TRUE);
         int t = RowTop(0, RH);
@@ -862,6 +938,17 @@ static void PageGeneral(void)
         RowText(2, RH, L"デスクトップ検索バー", d, 110, TRUE);
         t = RowTop(2, RH);
         Button(W_GOTO, PAGE_SEARCH, RightX(88), t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        _snwprintf(d, 64, L"デスクトップに置いている画像・GIF: %d 個", PhotoFrame_Count());
+        d[63] = 0;
+        RowText(3, RH, L"画像・GIF追加", d, 110, TRUE);
+        t = RowTop(3, RH);
+        Button(W_GOTO, PAGE_PHOTO, RightX(88), t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        RowText(4, RH, L"時計", L"デスクトップに置く、デジタル / アナログの時計", 150, TRUE);
+        t = RowTop(4, RH);
+        Toggle(W_TG_CLOCK, RightX(44), t + (RH - 24) / 2, Clock_Enabled(), TRUE);
+        Button(W_GOTO, PAGE_CLOCK, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
     }
     CardEnd();
 
@@ -886,7 +973,7 @@ static void PageGeneral(void)
 
         if (!g_first)
         {
-            RowText(2, RH, L"PromDock を終了", L"ドック・ランチャー・検索バーをすべて閉じます", 110, TRUE);
+            RowText(2, RH, L"PromDock を終了", L"ドック・ランチャー・検索バー・画像・時計をすべて閉じます", 110, TRUE);
             Button(W_BTN_QUIT, 0, RightX(100), RowTop(2, RH) + (RH - 34) / 2, 100, 34, L"終了する", 2, TRUE);
         }
     }
@@ -928,26 +1015,35 @@ static void PageDock(void)
     CardEnd();
 
     Section(L"外観");
-    CardBegin(RH * 3);
+    CardBegin(RH * 4);
     {
+        const wchar_t *dn[8];
+        int dc = Dock_StyleCount();
+        if (dc > 8)
+            dc = 8;
+        for (int i = 0; i < dc; i++)
+            dn[i] = Dock_StyleName(i);
+        RowText(0, RH, L"デザイン", L"", 466, on);
+        Segmented(W_SEG_DKSTYLE, RightX(460), RowTop(0, RH) + (RH - 34) / 2, 460, dn, dc, Dock_GetStyle(), on);
+
         wchar_t lb[24];
         int v = Dock_GetIconSize();
         _snwprintf(lb, 24, L"%d px", v);
         lb[23] = 0;
-        RowText(0, RH, L"アイコンのサイズ", L"ドックに並ぶアイコンの大きさ", 290, on);
-        Slider(W_SL_ICON, RightX(280), RowTop(0, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(1, RH, L"アイコンのサイズ", L"ドックに並ぶアイコンの大きさ", 290, on);
+        Slider(W_SL_ICON, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, v, lb, on);
 
         v = Dock_GetZoom();
         _snwprintf(lb, 24, L"%d %%", v);
         lb[23] = 0;
-        RowText(1, RH, L"ホバー時の拡大率", L"100% にすると拡大しません", 290, on);
-        Slider(W_SL_ZOOM, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(2, RH, L"ホバー時の拡大率", L"100% にすると拡大しません", 290, on);
+        Slider(W_SL_ZOOM, RightX(280), RowTop(2, RH) + (RH - 32) / 2, 280, v, lb, on);
 
         v = Dock_GetOpacity();
         _snwprintf(lb, 24, L"%d %%", v);
         lb[23] = 0;
-        RowText(2, RH, L"背景の濃さ", L"小さいほど背景が透けます", 290, on);
-        Slider(W_SL_OPACITY, RightX(280), RowTop(2, RH) + (RH - 32) / 2, 280, v, lb, on);
+        RowText(3, RH, L"背景の濃さ", L"小さいほど背景が透けます", 290, on);
+        Slider(W_SL_OPACITY, RightX(280), RowTop(3, RH) + (RH - 32) / 2, 280, v, lb, on);
     }
     CardEnd();
     Hint(L"アプリの追加はファイルやフォルダをドックへドラッグ&ドロップ、削除はドックの外へドラッグするか右クリックから行います。");
@@ -1063,15 +1159,164 @@ static void PageSearch(void)
     CardEnd();
 }
 
+/* 額縁に山と太陽の小さな絵 (サイドバーと一覧で使う) */
+static void PicGlyph(float cx, float cy, uint32_t c)
+{
+    RRs((int)(cx - 9), (int)(cy - 8), 18, 16, 3, 1.6f, c, 1.0f);
+    Dot(cx + 3.6f, cy - 3.2f, 1.9f, c, 1.0f);
+    Ln(cx - 6.5f, cy + 4.5f, cx - 2.0f, cy - 0.5f, 1.6f, c, 1.0f);
+    Ln(cx - 2.0f, cy - 0.5f, cx + 1.5f, cy + 3.5f, 1.6f, c, 1.0f);
+    Ln(cx + 0.0f, cy + 2.0f, cx + 3.0f, cy - 0.5f, 1.6f, c, 1.0f);
+    Ln(cx + 3.0f, cy - 0.5f, cx + 6.5f, cy + 4.5f, 1.6f, c, 1.0f);
+}
+
+static void PagePhoto(void)
+{
+    int n = PhotoFrame_Count(), lim = PhotoFrame_Limit();
+    Section(L"画像・GIF を追加");
+    CardBegin(RH * 2);
+    {
+        wchar_t lb[24];
+        _snwprintf(lb, 24, L"%d px", g_pfNewSize);
+        lb[23] = 0;
+        RowText(0, RH, L"大きさ", L"長い辺の長さ (縦横比はそのまま)", 300, TRUE);
+        Slider(W_SL_PFSIZE, RightX(290), RowTop(0, RH) + (RH - 32) / 2, 290, g_pfNewSize, lb, TRUE);
+
+        wchar_t d[96];
+        _snwprintf(d, 96, L"追加済み %d / %d 個  ·  PNG・JPEG・BMP・GIF など", n, lim);
+        d[95] = 0;
+        RowText(1, RH, L"画像・GIF を選んで追加", d, 140, TRUE);
+        Button(W_BTN_PFADD, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"ファイルを選ぶ", 1, n < lim);
+    }
+    CardEnd();
+
+    Section(L"デスクトップにある画像・GIF");
+    int lh = 60;
+    CardBegin(n > 0 ? n * lh : 64);
+    if (n == 0)
+        Txt(L"画像はまだありません。上の「ファイルを選ぶ」から追加できます。", CX, g_cardTop, CW, 64, g_fBody, g_pal->sub, FL_C);
+    for (int i = 0; i < n; i++)
+    {
+        int top = g_cardTop + i * lh;
+        wchar_t nm[MAX_PATH], info[160];
+        PhotoFrame_Name(i, nm, MAX_PATH);
+        PhotoFrame_Info(i, info, 160);
+        if (i > 0)
+            RR(CX + 18, top, CW - 36, 1, 0, g_pal->sep, 1.0f);
+        RR(CX + 18, top + 16, 28, 28, 8, g_pal->accent, g_dark ? 0.28f : 0.14f);
+        PicGlyph(CX + 32.0f, top + 30.0f, g_pal->accent);
+
+        int sx = RightX(72) - 12 - 148; /* 大きさの [-] [px] [+] */
+        int tw = sx - 12 - (CX + 58);
+        Txt(nm, CX + 58, top + 8, tw, 24, g_fBody, g_pal->text, FL_L);
+        Txt(info, CX + 58, top + 31, tw, 20, g_fSmall, g_pal->sub, FL_L);
+
+        int sz = PhotoFrame_GetSize(i);
+        wchar_t st[24];
+        _snwprintf(st, 24, L"%d px", sz);
+        st[23] = 0;
+        StepperA(W_STP_PFSIZE, i * 2, sx, top + (lh - 34) / 2, st, TRUE, sz > 100, sz < 1200);
+        Button(W_BTN_PFDEL, i, RightX(72), top + (lh - 32) / 2, 72, 32, L"削除", 2, TRUE);
+    }
+    CardEnd();
+
+    Section(L"配置");
+    CardBegin(RH);
+    {
+        BOOL mv = PhotoFrame_Movable();
+        RowText(0, RH, L"ドラッグで移動できるようにする",
+                mv ? L"オフにすると、画像を誤って動かさなくなります" : L"オンにすると、画像をドラッグで好きな場所へ置けます", 60, TRUE);
+        Toggle(W_TG_PFMOVE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, mv, TRUE);
+    }
+    CardEnd();
+    Hint(L"デスクトップの画像を右クリックすると、大きさの変更や削除もできます。画像は他のウィンドウの後ろ (デスクトップの上) に表示されます。");
+}
+
+/* 時計のアイコン (文字盤 + 針)。bg は文字盤の中を抜くための背景色 */
+static void ClockGlyph(float cx, float cy, uint32_t c, uint32_t bg)
+{
+    Dot(cx, cy, 9.0f, c, 1.0f);
+    Dot(cx, cy, 7.2f, bg, 1.0f);
+    Ln(cx, cy, cx, cy - 5.0f, 1.7f, c, 1.0f);
+    Ln(cx, cy, cx + 3.6f, cy + 2.0f, 1.7f, c, 1.0f);
+}
+
+static void PageClock(void)
+{
+    BOOL on = Clock_Enabled();
+    BOOL dig = Clock_GetStyle() == 0;
+    Section(L"時計");
+    CardBegin(RH);
+    {
+        RowText(0, RH, L"デスクトップに時計を表示", L"オンにすると、デスクトップに時計が現れます", 60, TRUE);
+        Toggle(W_TG_CLOCK, RightX(44), RowTop(0, RH) + (RH - 24) / 2, on, TRUE);
+    }
+    CardEnd();
+
+    Section(L"デザイン");
+    CardBegin(RH * 7);
+    {
+        static const wchar_t *const st[] = {L"デジタル", L"アナログ"};
+        static const wchar_t *const vd[] = {L"カード", L"細字", L"縦並び", L"分小", L"7セグ"};
+        static const wchar_t *const va[] = {L"カード", L"リング", L"波・白", L"波・黒", L"波・枠", L"石・明", L"石・暗"};
+        RowText(0, RH, L"スタイル", L"数字で表示するか、文字盤と針で表示するか", 220, on);
+        Segmented(W_SEG_CLSTYLE, RightX(210), RowTop(0, RH) + (RH - 34) / 2, 210, st, 2, Clock_GetStyle(), on);
+
+        RowText(1, RH, L"デザイン", dig ? L"カード・細字・縦並び・分小・7セグ" : L"カード・リング・波形・コンクリート", 400, on);
+        Segmented(W_SEG_CLVAR, RightX(390), RowTop(1, RH) + (RH - 34) / 2, 390, dig ? vd : va, dig ? 5 : 7,
+                  Clock_GetVariant(), on);
+
+        RowText(2, RH, L"24時間表示",
+                dig ? L"オフにすると、午前 / 午後 (AM / PM) の12時間表示になります" : L"アナログ時計では使いません", 60,
+                on && dig);
+        Toggle(W_TG_CL24, RightX(44), RowTop(2, RH) + (RH - 24) / 2, Clock_Get24h(), on && dig);
+
+        RowText(3, RH, L"秒を表示", L"秒まで表示します (アナログでは秒針。縦並び・分小・7セグでは使いません)", 60, on);
+        Toggle(W_TG_CLSEC, RightX(44), RowTop(3, RH) + (RH - 24) / 2, Clock_GetSeconds(), on);
+
+        RowText(4, RH, L"日付を表示", L"月日と曜日を表示します (細字・7セグ・コンクリートでは使いません)", 60, on);
+        Toggle(W_TG_CLDATE, RightX(44), RowTop(4, RH) + (RH - 24) / 2, Clock_GetDate(), on);
+
+        wchar_t lb[16];
+        _snwprintf(lb, 16, L"%d%%", Clock_GetSize());
+        lb[15] = 0;
+        RowText(5, RH, L"大きさ", L"時計全体の大きさ", 300, on);
+        Slider(W_SL_CLSIZE, RightX(290), RowTop(5, RH) + (RH - 32) / 2, 290, Clock_GetSize(), lb, on);
+
+        _snwprintf(lb, 16, L"%d%%", Clock_GetOpacity());
+        lb[15] = 0;
+        RowText(6, RH, L"背景の濃さ", L"背景のあるデザインで有効です (薄くすると透けます)", 300, on);
+        Slider(W_SL_CLOPA, RightX(290), RowTop(6, RH) + (RH - 32) / 2, 290, Clock_GetOpacity(), lb, on);
+    }
+    CardEnd();
+
+    Section(L"配置");
+    CardBegin(RH * 2);
+    {
+        BOOL mv = Clock_Movable();
+        RowText(0, RH, L"ドラッグで移動できるようにする",
+                mv ? L"オフにすると、時計を誤って動かさなくなります" : L"オンにすると、時計をドラッグで好きな場所へ置けます", 60,
+                TRUE);
+        Toggle(W_TG_CLMOVE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, mv, TRUE);
+
+        RowText(1, RH, L"位置をリセット", L"時計を画面の右上に戻します", 140, on);
+        Button(W_BTN_CLRESET, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"右上に戻す", 0, on);
+    }
+    CardEnd();
+    Hint(L"デスクトップの時計を右クリックしても、デザインの変更や非表示ができます。");
+}
+
 /* ------------------------------------------------------------------ */
 /* サイドバー / ヘッダー / フッター / 全体                                  */
 /* ------------------------------------------------------------------ */
-static const wchar_t *const kNavName[PAGE_COUNT] = {L"全般", L"ドック", L"ランチャー", L"検索バー"};
+static const wchar_t *const kNavName[PAGE_COUNT] = {L"全般", L"ドック", L"ランチャー", L"検索バー", L"画像・GIF追加", L"時計"};
 static const wchar_t *const kPageSub[PAGE_COUNT] = {
     L"使う機能の切り替えと、アプリ全体の設定です。",
     L"画面の端に置く、アプリのランチバーの設定です。",
     L"全画面で開くアプリ一覧の設定です。",
-    L"デスクトップに置ける検索バーを管理します。"};
+    L"デスクトップに置ける検索バーを管理します。",
+    L"デスクトップに置く画像・GIF アニメを管理します。",
+    L"デスクトップに置く時計ウィジェットの設定です。"};
 
 static void NavIcon(int page, float cx, float cy, uint32_t c)
 {
@@ -1098,6 +1343,12 @@ static void NavIcon(int page, float cx, float cy, uint32_t c)
                 FillRRd((cx - 8 + i * 6.0f) * g_dpi, FY(0) + (cy - 8 + j * 6.0f) * g_dpi,
                         (cx - 8 + i * 6.0f + 4) * g_dpi, FY(0) + (cy - 8 + j * 6.0f + 4) * g_dpi, 1.3f * g_dpi, c,
                         1.0f);
+        break;
+    case PAGE_PHOTO:
+        PicGlyph(cx, cy, c);
+        break;
+    case PAGE_CLOCK:
+        ClockGlyph(cx, cy, c, g_pal->side);
         break;
     default: /* 虫眼鏡 */
         Dot(cx - 2, cy - 2, 6.2f, c, 1.0f);
@@ -1226,6 +1477,12 @@ static void DrawAll(void)
     case PAGE_LAUNCHER:
         PageLauncher();
         break;
+    case PAGE_PHOTO:
+        PagePhoto();
+        break;
+    case PAGE_CLOCK:
+        PageClock();
+        break;
     default:
         PageSearch();
         break;
@@ -1306,8 +1563,17 @@ static void SetSlider(int id, int value, BOOL commit)
     case W_SL_OPACITY:
         Dock_SetOpacity(value);
         break;
+    case W_SL_PFSIZE:
+        g_pfNewSize = value;
+        break;
+    case W_SL_CLSIZE:
+        Clock_SetSize(value);
+        break;
+    case W_SL_CLOPA:
+        Clock_SetOpacity(value);
+        break;
     }
-    if (commit)
+    if (commit && id <= W_SL_OPACITY) /* ドックのスライダーだけ、ドックの設定を保存する */
         Dock_SaveSettings();
     Redraw();
 }
@@ -1322,6 +1588,12 @@ static int SliderGet(int id)
         return Dock_GetIconSize();
     case W_SL_ZOOM:
         return Dock_GetZoom();
+    case W_SL_PFSIZE:
+        return g_pfNewSize;
+    case W_SL_CLSIZE:
+        return Clock_GetSize();
+    case W_SL_CLOPA:
+        return Clock_GetOpacity();
     default:
         return Dock_GetOpacity();
     }
@@ -1431,6 +1703,11 @@ static void Activate(HWND hwnd, const Hit *h)
         Dock_SaveSettings();
         Redraw();
         break;
+    case W_SEG_DKSTYLE:
+        Dock_SetStyle(h->arg);
+        Dock_SaveSettings();
+        Redraw();
+        break;
     case W_SEG_LNSTYLE:
         g_lnStyle = h->arg;
         if (!g_first)
@@ -1500,6 +1777,66 @@ static void Activate(HWND hwnd, const Hit *h)
     case W_BTN_MOVE:
         SearchBar_SetMoveMode(!SearchBar_MoveMode());
         Redraw();
+        break;
+    case W_TG_PFMOVE:
+        PhotoFrame_SetMovable(!PhotoFrame_Movable());
+        Redraw();
+        break;
+    case W_STP_PFSIZE:
+    {
+        int i = h->arg / 2, d = (h->arg % 2) ? 1 : -1;
+        PhotoFrame_SetSize(i, ClampInt(PhotoFrame_GetSize(i) + d * 50, 100, 1200));
+        Redraw();
+        break;
+    }
+    case W_BTN_PFADD:
+    {
+        wchar_t path[MAX_PATH];
+        if (PhotoFrame_PickFile(hwnd, path, MAX_PATH))
+        {
+            if (PhotoFrame_Add(path, g_pfNewSize))
+                Notice(L"デスクトップに追加しました。ドラッグで好きな場所へ動かせます。", FALSE);
+            else
+                Notice(L"追加できませんでした。対応していない形式か、読み込めないファイルです。", TRUE);
+        }
+        Redraw();
+        break;
+    }
+    case W_BTN_PFDEL:
+        PhotoFrame_Remove(h->arg); /* 内部で表示も更新される */
+        Redraw();
+        break;
+    case W_TG_CLOCK:
+        Clock_SetEnabled(!Clock_Enabled());
+        Redraw();
+        break;
+    case W_SEG_CLSTYLE:
+        Clock_SetStyle(h->arg);
+        Redraw();
+        break;
+    case W_SEG_CLVAR:
+        Clock_SetVariant(h->arg);
+        Redraw();
+        break;
+    case W_TG_CL24:
+        Clock_Set24h(!Clock_Get24h());
+        Redraw();
+        break;
+    case W_TG_CLSEC:
+        Clock_SetSeconds(!Clock_GetSeconds());
+        Redraw();
+        break;
+    case W_TG_CLDATE:
+        Clock_SetDate(!Clock_GetDate());
+        Redraw();
+        break;
+    case W_TG_CLMOVE:
+        Clock_SetMovable(!Clock_Movable());
+        Redraw();
+        break;
+    case W_BTN_CLRESET:
+        Clock_ResetPosition();
+        Notice(L"時計を画面の右上に戻しました。", FALSE);
         break;
     case W_BTN_OK:
         if (g_first)
@@ -1707,7 +2044,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_focusId = h->id;
             g_focusArg = h->arg;
             SetCapture(hwnd);
-            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_OPACITY)
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_CLOPA)
             {
                 g_dragSlider = TRUE;
                 g_dragId = h->id;
@@ -1793,15 +2130,17 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (!h || !h->en)
                 return 0;
             int d = wp == VK_LEFT ? -1 : 1;
-            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_OPACITY)
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_CLOPA)
             {
                 int mn, mx, st;
                 SliderRange(h->id, &mn, &mx, &st);
                 SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
             }
-            else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE)
+            else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE ||
+                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE)
             {
-                int n = h->id == W_SEG_THEME ? 3 : (h->id == W_SEG_LNSTYLE ? 2 : 4);
+                int n = h->id == W_SEG_DKSTYLE ? Dock_StyleCount() : h->id == W_SEG_THEME ? 3
+                                                                                          : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
                 int a = ClampInt(h->arg + d, 0, n - 1);
                 Hit copy = *h;
                 copy.arg = a;
@@ -1907,6 +2246,8 @@ BOOL Settings_PreTranslate(MSG *m)
 }
 
 void Settings_RefreshSearchBar(void) { Redraw(); }
+void Settings_RefreshPhotoFrame(void) { Redraw(); }
+void Settings_RefreshClock(void) { Redraw(); }
 
 /* ------------------------------------------------------------------ */
 /* タスクトレイ                                                          */
@@ -2087,7 +2428,7 @@ BOOL Settings_Init(HINSTANCE hInst)
     AddTray();
     return TRUE;
 }
-/*ああああ*/
+
 void Settings_Shutdown(void)
 {
     DelTray();

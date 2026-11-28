@@ -31,7 +31,6 @@
  *   ※ Settings_Init() は SearchBar_Init() より先に走る (初回設定) ので、
  *      追加・削除などは初期化前に呼ばれても安全に動くようにしてある。
  */
-/*ああああ*/
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
 #define _UNICODE
@@ -845,7 +844,8 @@ static BOOL IsDesktopHost(HWND w) { return ClassIs(w, L"Progman") || ClassIs(w, 
 static BOOL AtDesktopLevel(HWND h)
 {
     HWND w = GetWindow(h, GW_HWNDNEXT);
-    while (w && ClassIs(w, L"PromSearchBarWnd")) /* 他の検索バーは飛ばす */
+    while (w && (ClassIs(w, L"PromSearchBarWnd") || ClassIs(w, L"PromPhotoFrameWnd") ||
+                 ClassIs(w, L"PromClockWnd"))) /* 他の検索バー・画像・時計は飛ばす */
         w = GetWindow(w, GW_HWNDNEXT);
     return w && IsDesktopHost(w);
 }

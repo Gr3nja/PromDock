@@ -22,10 +22,13 @@
  *   - 設定は exe と同じフォルダの promdock.txt (UTF-8) に保存
  *       @autohide @edge @frac @hidems のほか、アプリ設定(setting.c)から変更できる
  *       @iconsize=48 (アイコンサイズ px) / @zoom=150 (ホバー時の拡大率 %) / @opacity=78 (背景の濃さ %)
+ *       @style=0 (デザイン 0:標準 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ 6:オニキス 7:ノワール)
+ *       デザインは右クリック > 設定 > デザイン、またはアプリ設定(ドック > 外観)から切り替えられる
  *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
  *   - デスクトップに置ける検索バー (searchbar.c / 同じexeにビルド。ブラウザと検索エンジンを選んで追加)
+ *   - デスクトップに置ける画像・GIF (photoframe.c) と時計ウィジェット (clock.c) も同じexeにビルド
  *   - 初回起動時はアプリ設定(setting.c)が開き、ドック/ランチャーを有効にするか選べる
- *     アプリ設定は「全般 / ドック / ランチャー / 検索バー」のページに分かれており、各機能の細かい設定もそこで変更できる
+ *     アプリ設定は「全般 / ドック / ランチャー / 検索バー / 画像・GIF追加 / 時計」のページに分かれており、各機能の細かい設定もそこで変更できる
  */
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
@@ -54,6 +57,12 @@ void Launcher_Shutdown(void);
 /* searchbar.c (デスクトップに置ける検索バー) */
 void SearchBar_Init(HINSTANCE hInst);
 void SearchBar_Shutdown(void);
+/* photoframe.c (デスクトップに置ける写真・GIF) */
+void PhotoFrame_Init(HINSTANCE hInst);
+void PhotoFrame_Shutdown(void);
+/* clock.c (デスクトップに置ける時計) */
+void Clock_Init(HINSTANCE hInst);
+void Clock_Shutdown(void);
 /* setting.c (アプリ設定: ドック/ランチャーの有効・無効) */
 BOOL Settings_Init(HINSTANCE hInst);
 void Settings_Open(void);
@@ -127,6 +136,70 @@ typedef struct
 static Style g_barStyle = {36, 36, 40, 0.78f, 0, 0, 0, 0.0f};        /* ダークグレー半透明(濃いめ)・枠線なし。fa は設定で変更可 */
 static float g_baseSize = BASE_SIZE_DEF, g_maxScale = MAX_SCALE_DEF; /* 設定(setting.c)から変更できる */
 static const Style g_labelStyle = {26, 26, 30, 0.92f, 0, 0, 0, 0.0f};
+
+/* ------------------------------------------------------------------ */
+/* デザイン (テーマ)                                                     */
+/*   バーの形・色・影・枠線・実行中の目印・ラベルをテーマごとに持つ。            */
+/*   新しいデザインは g_themes に1行足して N_STYLES を増やすだけ。            */
+/* ------------------------------------------------------------------ */
+#define N_STYLES 8
+typedef struct
+{
+    float r, g, b, a; /* r,g,b: 0..255 / a: 0..1 */
+} Col;
+typedef struct
+{
+    const wchar_t *name;
+    BOOL tiles;                         /* TRUE: バーを描かず、アイコンごとにタイルを描く */
+    float padx, pady, gap, margin, rad; /* 96DPI基準px。rad = バーの角丸 */
+    float iconScale;                    /* アイコンの描画倍率 (タイル内に収める用) */
+    Col f0, f1;                         /* 塗り: f0=画面端側 (alongU時は始点) / f1=外側 (終点) */
+    BOOL alongU;                        /* TRUE: 塗りと枠線のグラデーションを端に沿う方向にかける */
+    Col b0, b1;                         /* 枠線の色 */
+    float bw;                           /* 枠線の太さ (0で枠線なし) */
+    float shine;                        /* 外側半分にかける光沢の強さ */
+    float rim;                          /* 外側の縁のすぐ内側に引くハイライトの強さ */
+    Col sh;                             /* 影 / グロー の色 */
+    float shBlur;                       /* 影 / グロー の広がり (px) */
+    int ind;                            /* 実行中の目印 0:丸 1:ピル 2:グロー付きの丸 */
+    float indR;                         /* 丸の半径 (px) */
+    Col indC;                           /* 目印の色 */
+    BOOL halo;                          /* 丸の周りに薄い影を付ける (明るい背景でも見えるように) */
+    float divider;                      /* 固定項目と実行中項目の区切り線の濃さ (0で無し) */
+    Style label;                        /* ラベルの背景・枠線 */
+    float labelRad;                     /* ラベルの角丸 (高さに対する比。0.5でピル) */
+    Col labelTxt;                       /* ラベルの文字色 */
+} Theme;
+
+static const Theme g_themes[N_STYLES] = {
+    /* 0: 標準 (従来のダークグレー半透明) */
+    {L"標準", FALSE, BAR_PAD_X, BAR_PAD_Y, ICON_GAP, EDGE_MARGIN, 18.0f, 1.0f, {36, 36, 40, 0.78f}, {36, 36, 40, 0.78f}, FALSE, {0, 0, 0, 0.0f}, {0, 0, 0, 0.0f}, 0.0f, 0.0f, 0.0f, {0, 0, 0, 0.0f}, 0.0f, 0, 2.6f, {235, 235, 240, 0.95f}, FALSE, 0.0f, {26, 26, 30, 0.92f, 0, 0, 0, 0.0f}, 0.5f, {255, 255, 255, 1.0f}},
+
+    /* 1: macOS風 (すりガラス調の明るい半透明バー + 細い縁 + やわらかい影 + 小さな丸 + 区切り線) */
+    {L"macOS", FALSE, 12.0f, 10.0f, 6.0f, 10.0f, 22.0f, 1.0f, {246, 248, 255, 0.20f}, {255, 255, 255, 0.34f}, FALSE, {255, 255, 255, 0.20f}, {255, 255, 255, 0.52f}, 1.0f, 0.0f, 0.0f, {0, 0, 0, 0.34f}, 12.0f, 0, 2.3f, {255, 255, 255, 0.92f}, TRUE, 0.30f, {32, 32, 36, 0.90f, 255, 255, 255, 0.14f}, 0.34f, {255, 255, 255, 1.0f}},
+
+    /* 2: ガラス (青みのある透明ガラス + 光沢 + 明るい縁) */
+    {L"ガラス", FALSE, 14.0f, 11.0f, 8.0f, 10.0f, 26.0f, 1.0f, {120, 150, 215, 0.16f}, {190, 215, 255, 0.26f}, FALSE, {255, 255, 255, 0.20f}, {255, 255, 255, 0.78f}, 1.2f, 0.20f, 0.35f, {30, 50, 110, 0.40f}, 12.0f, 2, 2.4f, {175, 215, 255, 1.0f}, FALSE, 0.22f, {24, 32, 56, 0.90f, 190, 215, 255, 0.35f}, 0.5f, {240, 247, 255, 1.0f}},
+
+    /* 3: モダン (バーなし。アイコンごとのダークタイル + ピル型の目印) */
+    {L"モダン", TRUE, 8.0f, 11.0f, 12.0f, 10.0f, 0.0f, 0.78f, {24, 26, 34, 0.82f}, {46, 50, 64, 0.82f}, FALSE, {255, 255, 255, 0.06f}, {255, 255, 255, 0.20f}, 1.0f, 0.06f, 0.0f, {0, 0, 0, 0.40f}, 9.0f, 1, 0.0f, {96, 165, 255, 1.0f}, FALSE, 0.0f, {22, 24, 30, 0.94f, 255, 255, 255, 0.10f}, 0.32f, {255, 255, 255, 1.0f}},
+
+    /* 4: ネオン (濃い紺のバー + マゼンタ→シアンの発光する枠線) */
+    {L"ネオン", FALSE, 16.0f, 12.0f, 9.0f, 12.0f, 20.0f, 1.0f, {12, 10, 26, 0.86f}, {12, 10, 26, 0.86f}, TRUE, {255, 64, 200, 1.0f}, {64, 220, 255, 1.0f}, 1.6f, 0.05f, 0.0f, {150, 90, 255, 0.50f}, 12.0f, 2, 2.4f, {90, 245, 255, 1.0f}, FALSE, 0.25f, {14, 12, 28, 0.94f, 120, 220, 255, 0.55f}, 0.5f, {220, 245, 255, 1.0f}},
+
+    /* 5: オーロラ (紫→ピンクのグラデーション + 光沢) */
+    {L"オーロラ", FALSE, 14.0f, 11.0f, 8.0f, 10.0f, 24.0f, 1.0f, {110, 90, 255, 0.62f}, {255, 110, 180, 0.62f}, TRUE, {255, 255, 255, 0.40f}, {255, 255, 255, 0.40f}, 1.0f, 0.18f, 0.25f, {90, 50, 180, 0.42f}, 12.0f, 0, 2.4f, {255, 255, 255, 1.0f}, TRUE, 0.35f, {40, 24, 80, 0.92f, 255, 255, 255, 0.18f}, 0.5f, {255, 255, 255, 1.0f}},
+
+    /* 6: オニキス (マットな漆黒 + 細い縁 + 小さめの角丸。ミニマルでシック) */
+    {L"オニキス", FALSE, 12.0f, 10.0f, 8.0f, 10.0f, 10.0f, 1.0f, {12, 12, 14, 0.94f}, {30, 30, 34, 0.94f}, FALSE, {255, 255, 255, 0.06f}, {255, 255, 255, 0.16f}, 1.0f, 0.0f, 0.10f, {0, 0, 0, 0.55f}, 10.0f, 0, 2.2f, {235, 235, 240, 0.90f}, FALSE, 0.14f, {10, 10, 12, 0.95f, 255, 255, 255, 0.12f}, 0.22f, {240, 240, 244, 1.0f}},
+
+    /* 7: ノワール (黒 + シャンパンゴールドの細い縁と目印。ほぼ直角に近い角丸) */
+    {L"ノワール", FALSE, 14.0f, 10.0f, 8.0f, 10.0f, 6.0f, 1.0f, {6, 6, 7, 0.95f}, {14, 14, 15, 0.95f}, FALSE, {196, 164, 104, 0.35f}, {222, 190, 130, 0.85f}, 1.0f, 0.0f, 0.0f, {0, 0, 0, 0.60f}, 10.0f, 0, 2.2f, {222, 190, 130, 1.0f}, FALSE, 0.22f, {6, 6, 7, 0.96f, 222, 190, 130, 0.50f}, 0.18f, {240, 230, 210, 1.0f}},
+};
+static int g_style = 0; /* 0:クラシック 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ */
+static const Theme *Th(void) { return &g_themes[g_style]; }
+/* 「背景の濃さ」設定 (既定 0.78 = 等倍) をテーマの塗りの不透明度に掛ける */
+static float OpacityMul(void) { return g_barStyle.fa / 0.78f; }
 
 static const int g_mipSize[MIP_LEVELS] = {256, 128, 64};
 
@@ -673,6 +746,7 @@ static void SaveConfig(void)
         return;
     fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
     fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
+    fprintf(f, "@style=%d\r\n", g_style);
     for (int i = 0; i < g_count; i++)
     {
         if (!g_items[i].pinned)
@@ -730,6 +804,8 @@ static void LoadConfig(void)
                 g_maxScale = ClampI(atoi(p + 6), 100, 200) / 100.0f;
             else if (strncmp(p, "@opacity=", 9) == 0)
                 g_barStyle.fa = ClampI(atoi(p + 9), 30, 100) / 100.0f;
+            else if (strncmp(p, "@style=", 7) == 0)
+                g_style = ClampI(atoi(p + 7), 0, N_STYLES - 1);
         }
         else if (*p && *p != '#')
         {
@@ -896,10 +972,11 @@ static void ResizeDock(void)
     SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
     BOOL vert = IsVert();
 
-    g_gap = ICON_GAP * d;
-    g_padx = BAR_PAD_X * d;
-    g_pady = BAR_PAD_Y * d;
-    g_margin = EDGE_MARGIN * d;
+    const Theme *th = Th();
+    g_gap = th->gap * d;
+    g_padx = th->padx * d;
+    g_pady = th->pady * d;
+    g_margin = th->margin * d;
     g_bounce = BOUNCE_HEIGHT * d;
 
     int n = g_count > 0 ? g_count : 1;
@@ -1180,9 +1257,142 @@ static float LiftOf(const Item *it, DWORD now)
     return v >= 0.0f ? g_bounce * v : g_bounce * 0.3f * v;
 }
 
+/* 汎用パネル: 影/グロー + グラデーション塗り + 光沢 + 縁ハイライト + 枠線 を1パスで描く。
+ * 座標は論理座標 (u: 軸方向, v: 画面端からの距離)。既存ピクセルの上に合成する。
+ *   pass  : 1=影だけ 2=本体だけ 3=両方 (タイルは影を先にまとめて描くために分ける)
+ *   aMul  : 塗りの不透明度の倍率 / lift: 白に近づける量 0..1 / accent: 枠線色の上書き (NULL可) */
+static float Lerpf(float a, float b, float t) { return a + (b - a) * t; }
+
+#define OVER(cr, cg, cb, ca)      \
+    do                            \
+    {                             \
+        float _a = (ca);          \
+        float _i = 1.0f - _a;     \
+        pr = (cr) * _a + pr * _i; \
+        pg = (cg) * _a + pg * _i; \
+        pb = (cb) * _a + pb * _i; \
+        pa = _a + pa * _i;        \
+    } while (0)
+
+static void DrawPanel(float u0, float v0, float u1, float v1, float rad, const Theme *t,
+                      float aMul, float lift, const Col *accent, int pass)
+{
+    float L, T, R, B;
+    LRect(u0, v0, u1, v1, &L, &T, &R, &B);
+    float d = g_dpi;
+    float blur = (pass & 1) ? t->shBlur * d : 0.0f;
+    float cx = (L + R) * 0.5f, cy = (T + B) * 0.5f, hw = (R - L) * 0.5f, hh = (B - T) * 0.5f;
+    float ext = blur + 3.0f;
+    int x0 = ClampI((int)(L - ext), 0, g_W), x1 = ClampI((int)(R + ext) + 1, 0, g_W);
+    int y0 = ClampI((int)(T - ext), 0, g_H), y1 = ClampI((int)(B + ext) + 1, 0, g_H);
+    float bw = t->bw * d;
+    float lu = fmaxf(u1 - u0, 1.0f), lv = fmaxf(v1 - v0, 1.0f);
+    float fa0 = fminf(t->f0.a * aMul, 1.0f), fa1 = fminf(t->f1.a * aMul, 1.0f);
+
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float px = x + 0.5f - cx, py = y + 0.5f - cy;
+            float qx = fabsf(px) - hw + rad, qy = fabsf(py) - hh + rad;
+            float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f);
+            float dist = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0.0f) - rad; /* 角丸矩形SDF */
+            if (dist > blur + 1.0f)
+                continue;
+
+            float pr = 0.0f, pg = 0.0f, pb = 0.0f, pa = 0.0f;
+
+            if (blur > 0.0f && t->sh.a > 0.0f)
+            { /* 影/グロー: パネルの外側だけ (透けるガラスの内側を濁らせない) */
+                float cov = Clamp01(dist + 0.5f);
+                float k = Clamp01(1.0f - fmaxf(dist, 0.0f) / blur);
+                OVER(t->sh.r, t->sh.g, t->sh.b, t->sh.a * k * k * cov);
+            }
+
+            if (pass & 2)
+            {
+                float outer = Clamp01(0.5f - dist);
+                if (outer > 0.0f)
+                {
+                    float u, v;
+                    W2L(x + 0.5f, y + 0.5f, &u, &v);
+                    float tv = Clamp01((v - v0) / lv), tu = Clamp01((u - u0) / lu);
+                    float g = t->alongU ? tu : tv;
+
+                    float fr = Lerpf(t->f0.r, t->f1.r, g);
+                    float fgc = Lerpf(t->f0.g, t->f1.g, g);
+                    float fb = Lerpf(t->f0.b, t->f1.b, g);
+                    if (lift > 0.0f)
+                    {
+                        fr += (255.0f - fr) * lift * 0.10f;
+                        fgc += (255.0f - fgc) * lift * 0.10f;
+                        fb += (255.0f - fb) * lift * 0.10f;
+                    }
+                    OVER(fr, fgc, fb, Lerpf(fa0, fa1, g) * outer);
+
+                    if (t->shine > 0.0f) /* 外側の半分に光沢 */
+                    {
+                        float sa = t->shine * Clamp01((tv - 0.35f) / 0.65f);
+                        OVER(255.0f, 255.0f, 255.0f, sa * outer);
+                    }
+                    if (t->rim > 0.0f) /* 外側の縁のすぐ内側に細いハイライト */
+                    {
+                        float rc = Clamp01(0.5f * d + 0.5f - fabsf(dist + bw + 0.5f * d));
+                        float w = Clamp01((tv - 0.55f) / 0.45f);
+                        OVER(255.0f, 255.0f, 255.0f, t->rim * rc * w * outer);
+                    }
+                    if (bw > 0.0f)
+                    {
+                        float bc = Clamp01(0.5f - dist) - Clamp01(0.5f - (dist + bw));
+                        if (bc > 0.0f)
+                        {
+                            const Col *c0 = accent ? accent : &t->b0, *c1 = accent ? accent : &t->b1;
+                            OVER(Lerpf(c0->r, c1->r, g), Lerpf(c0->g, c1->g, g), Lerpf(c0->b, c1->b, g),
+                                 Lerpf(c0->a, c1->a, g) * bc);
+                        }
+                    }
+                }
+            }
+
+            if (pa <= 0.0f)
+                continue;
+            uint32_t *dp = &g_bits[y * g_W + x];
+            uint32_t dv = *dp;
+            float inv = 1.0f - pa;
+            float oa = pa * 255.0f + ((dv >> 24) & 255) * inv;
+            float orr = pr + ((dv >> 16) & 255) * inv;
+            float og = pg + ((dv >> 8) & 255) * inv;
+            float ob = pb + (dv & 255) * inv;
+            if (oa > 255.0f)
+                oa = 255.0f;
+            if (orr > oa)
+                orr = oa; /* premultiplied を超えないように */
+            if (og > oa)
+                og = oa;
+            if (ob > oa)
+                ob = oa;
+            *dp = ((uint32_t)(oa + 0.5f) << 24) | ((uint32_t)(orr + 0.5f) << 16) |
+                  ((uint32_t)(og + 0.5f) << 8) | (uint32_t)(ob + 0.5f);
+        }
+}
+#undef OVER
+
+/* モダン用: アイコンごとのタイル。ホバーで少し明るく、前面のアプリは枠をアクセント色に */
+static void DrawTile(const Item *it, DWORD now, int pass)
+{
+    if (it->sz < 4.0f)
+        return;
+    const Theme *t = Th();
+    float half = it->sz * 0.5f;
+    float vc = g_baseline + half + LiftOf(it, now);
+    float hot = (g_maxScale > 1.001f) ? Clamp01((it->scale - 1.0f) / (g_maxScale - 1.0f)) : 0.0f;
+    static const Col acc = {96.0f, 165.0f, 255.0f, 0.85f};
+    DrawPanel(it->cx - half, vc - half, it->cx + half, vc + half, it->sz * 0.26f, t,
+              OpacityMul(), hot, (it->fg && it->nwin > 0) ? &acc : NULL, pass);
+}
+
 static void DrawItem(const Item *it, DWORD now)
 {
-    int dw = (int)(it->sz + 0.5f);
+    int dw = (int)(it->sz * Th()->iconScale + 0.5f);
     if (dw < 4)
         return;
     float xc, yc;
@@ -1253,14 +1463,81 @@ static BOOL AnyPending(void)
     return FALSE;
 }
 
-/* 起動中のアプリ: アイコンの画面端側に丸を1つ */
+/* ピル (カプセル) 状の目印。軸方向に len、厚み th */
+static void DrawCapsule(float cx, float cy, float len, float th, const Col *c)
+{
+    BOOL vert = IsVert();
+    float hl = fmaxf(len * 0.5f - th * 0.5f, 0.0f);
+    float ex = (vert ? th : len) * 0.5f + 2.0f, ey = (vert ? len : th) * 0.5f + 2.0f;
+    int x0 = (int)(cx - ex), x1 = (int)(cx + ex) + 1, y0 = (int)(cy - ey), y1 = (int)(cy + ey) + 1;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            float al = vert ? dy : dx, pe = vert ? dx : dy;
+            float a = fmaxf(fabsf(al) - hl, 0.0f);
+            float cov = Clamp01(0.5f - (sqrtf(a * a + pe * pe) - th * 0.5f));
+            BlendPx(x, y, c->r, c->g, c->b, cov * c->a);
+        }
+}
+
+/* 起動中のアプリ: アイコンの画面端側に目印を1つ (形はテーマごと) */
 static void DrawIndicator(const Item *it)
 {
     if (it->nwin <= 0 && !IsPending(it))
         return;
-    float x, y;
+    const Theme *t = Th();
+    const Col *c = &t->indC;
+    float d = g_dpi, x, y;
+    if (t->ind == 1)
+    { /* ピル: 前面のアプリは長く */
+        L2W(it->cx, g_margin + g_pady * 0.42f, &x, &y);
+        DrawCapsule(x, y, ((it->fg && it->nwin > 0) ? 16.0f : 6.0f) * d, 3.2f * d, c);
+        return;
+    }
     L2W(it->cx, g_margin + g_pady * 0.38f, &x, &y);
-    DrawDot(x, y, 2.6f * g_dpi, 235.f, 235.f, 240.f, 0.95f);
+    float r = t->indR * d;
+    if (t->halo)
+        DrawDot(x, y, r + 0.9f * d, 0.f, 0.f, 0.f, 0.22f);
+    if (t->ind == 2)
+    { /* グロー付き */
+        DrawDot(x, y, r * 2.8f, c->r, c->g, c->b, 0.12f);
+        DrawDot(x, y, r * 1.8f, c->r, c->g, c->b, 0.22f);
+    }
+    DrawDot(x, y, r, c->r, c->g, c->b, c->a);
+}
+
+/* 固定項目と実行中項目の間の細い区切り線 (テーマが有効にしたときだけ) */
+static void DrawDivider(void)
+{
+    const Theme *t = Th();
+    int np = NPinned();
+    if (t->divider <= 0.0f || t->tiles || np <= 0 || np >= g_count)
+        return;
+    const Item *a = &g_items[np - 1], *b = &g_items[np];
+    float u = ((a->cx + a->sz * 0.5f) + (b->cx - b->sz * 0.5f)) * 0.5f;
+    float v0 = g_baseline + g_base * 0.12f, v1 = g_baseline + g_base * 0.88f;
+    float xa, ya, xb, yb;
+    L2W(u, v0, &xa, &ya);
+    L2W(u, v1, &xb, &yb);
+    int w = (int)ceilf(g_dpi), X0, X1, Y0, Y1;
+    if (!IsVert())
+    {
+        X0 = (int)floorf(xa - w * 0.5f + 0.5f);
+        X1 = X0 + w;
+        Y0 = (int)fminf(ya, yb);
+        Y1 = (int)fmaxf(ya, yb);
+    }
+    else
+    {
+        Y0 = (int)floorf(ya - w * 0.5f + 0.5f);
+        Y1 = Y0 + w;
+        X0 = (int)fminf(xa, xb);
+        X1 = (int)fmaxf(xa, xb);
+    }
+    for (int y = Y0; y < Y1; y++)
+        for (int x = X0; x < X1; x++)
+            BlendPx(x, y, 255.f, 255.f, 255.f, t->divider);
 }
 
 /* ラベル (GDIで白文字をマスクに描き、自前で合成) */
@@ -1344,15 +1621,16 @@ static void DrawLabel(const Item *it, DWORD now)
     }
     float L, T, R, B;
     LRect(u0, v0, u1, v1, &L, &T, &R, &B);
-    DrawRRect(L, T, R, B, ph * 0.5f, &g_labelStyle);
+    DrawRRect(L, T, R, B, ph * Th()->labelRad, &Th()->label);
 
+    const Col *lt = &Th()->labelTxt;
     int tx = (int)(L + 10 * d), ty = (int)(T + 5 * d);
     for (int y = 0; y < g_lblH; y++)
         for (int x = 0; x < g_lblW; x++)
         {
             uint8_t m = g_lblMask[y * g_lblW + x];
             if (m)
-                BlendPx(tx + x, ty + y, 255, 255, 255, m / 255.0f);
+                BlendPx(tx + x, ty + y, lt->r, lt->g, lt->b, m / 255.0f * lt->a);
         }
 }
 
@@ -1370,13 +1648,31 @@ static void Render(void)
         for (int x = hx0; x < hx1; x++)
             g_bits[y * g_W + x] = 0x01000000u;
 
-    LRect(g_barL, g_barV0, g_barR, g_barV1, &L, &T, &R, &B);
-    float r = 18.0f * g_dpi, hh = (g_barV1 - g_barV0) * 0.5f;
-    DrawRRect(L, T, R, B, r < hh ? r : hh, &g_barStyle);
-
+    const Theme *th = Th();
     DWORD now = GetTickCount();
+    float r = th->rad * g_dpi, hh = (g_barV1 - g_barV0) * 0.5f;
+    if (r > hh)
+        r = hh;
+    if (th->tiles)
+    { /* タイル: 影を先にまとめて描き、隣のタイルに影が被らないようにする */
+        for (int i = 0; i < g_count; i++)
+            DrawTile(&g_items[i], now, 1);
+    }
+    else if (g_style == 0)
+    { /* クラシック: 従来どおり */
+        LRect(g_barL, g_barV0, g_barR, g_barV1, &L, &T, &R, &B);
+        DrawRRect(L, T, R, B, r, &g_barStyle);
+    }
+    else
+    {
+        DrawPanel(g_barL, g_barV0, g_barR, g_barV1, r, th, OpacityMul(), 0.0f, NULL, 3);
+        DrawDivider();
+    }
+
     for (int i = 0; i < g_count; i++)
     {
+        if (th->tiles)
+            DrawTile(&g_items[i], now, 2);
         DrawItem(&g_items[i], now);
         if (i != g_dragOut)
             DrawIndicator(&g_items[i]);
@@ -1541,6 +1837,11 @@ static void ShowContextMenu(HWND hwnd, int hit)
         swprintf(b, 32, L"%d.%d 秒", g_hideChoices[i] / 1000, (g_hideChoices[i] % 1000) / 100);
         AppendMenuW(mt, MF_STRING | (g_hideMs == g_hideChoices[i] ? MF_CHECKED : 0), 20 + i, b);
     }
+    HMENU ms = CreatePopupMenu();
+    for (int i = 0; i < N_STYLES; i++)
+        AppendMenuW(ms, MF_STRING | (g_style == i ? MF_CHECKED : 0), 40 + i, g_themes[i].name);
+    AppendMenuW(set, MF_POPUP, (UINT_PTR)ms, L"デザイン");
+    AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mo, L"向き");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mp, L"位置");
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
@@ -1643,6 +1944,11 @@ static void ShowContextMenu(HWND hwnd, int hit)
         {
             g_hideMs = g_hideChoices[cmd - 20];
             SaveConfig();
+        }
+        else if (cmd >= 40 && cmd < 40 + N_STYLES)
+        {
+            g_style = cmd - 40;
+            ApplyLayoutChange(); /* 寸法がテーマごとに違うので、保存 + 再レイアウト */
         }
         break;
     }
@@ -2256,6 +2562,15 @@ void Dock_SetOpacity(int pct)
         Render();
 }
 
+int Dock_GetStyle(void) { return g_style; }
+void Dock_SetStyle(int s)
+{
+    g_style = ClampI(s, 0, N_STYLES - 1);
+    DockRelayout();
+}
+int Dock_StyleCount(void) { return N_STYLES; }
+const wchar_t *Dock_StyleName(int i) { return g_themes[ClampI(i, 0, N_STYLES - 1)].name; }
+
 /* タスクトレイ/設定ウィンドウからの終了用 */
 void Dock_Quit(void)
 {
@@ -2276,7 +2591,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     HDC scr = GetDC(NULL);
     g_dpi = GetDeviceCaps(scr, LOGPIXELSX) / 96.0f;
     ReleaseDC(NULL, scr);
-    /*ああああ*/
+
     /* 初回はここで設定ウィンドウが開き、ドック/ランチャーを有効にするか選ぶ。
        FALSE: 二重起動 (動作中のアプリの設定を開いた) か、初回設定で終了が選ばれた */
     if (!Settings_Init(hInst))
@@ -2316,6 +2631,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     RegisterDragDrop(g_hwnd, &g_dropTarget);
     Launcher_Init(hInst);
     SearchBar_Init(hInst);
+    PhotoFrame_Init(hInst);
+    Clock_Init(hInst);
     g_leaveTick = GetTickCount();
     LoadConfig();
     RefreshRunning();
@@ -2339,6 +2656,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
         FreeItem(&g_items[i]);
     free(g_lblMask);
     DestroyGhost();
+    Clock_Shutdown();
+    PhotoFrame_Shutdown();
     SearchBar_Shutdown();
     Launcher_Shutdown();
     OleUninitialize();

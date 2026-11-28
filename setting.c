@@ -90,6 +90,11 @@ int Dock_GetStyle(void);
 void Dock_SetStyle(int s);
 int Dock_StyleCount(void);
 const wchar_t *Dock_StyleName(int i);
+int Dock_Count(void);
+int Dock_GetEdit(void);
+void Dock_SetEdit(int i);
+BOOL Dock_Add(void);
+BOOL Dock_RemoveAt(int i);
 int Dock_GetZOrder(void);
 void Dock_SetZOrder(int z);
 int Dock_GetType(void);
@@ -198,6 +203,7 @@ enum
     W_SEG_DKSTYLE, /* ドック: デザイン */
     W_SEG_DKTYPE,  /* ドック: 形 (バー / サークル) */
     W_SEG_DKZ,     /* ドック: 重なり順 (最前列 / 最奥) */
+    W_SEG_DKSEL,   /* ドック: 編集するドックの選択 (ドック1〜3) */
     W_SL_HIDEMS,
     W_SL_ICON,
     W_SL_ZOOM,
@@ -211,6 +217,8 @@ enum
     W_DD_BROWSER,
     W_DD_ENGINE,
     W_BTN_RESETPOS,
+    W_BTN_DKADD, /* ドックを追加 */
+    W_BTN_DKDEL, /* 選択中のドックを削除 */
     W_BTN_OPENDIR,
     W_BTN_QUIT,
     W_BTN_ADD,
@@ -991,6 +999,22 @@ static void PageGeneral(void)
 static void PageDock(void)
 {
     BOOL on = g_dockOn;
+    Section(L"ドックの数 (最大3つ)");
+    CardBegin(RH * 2);
+    {
+        static const wchar_t *const dk[] = {L"ドック1", L"ドック2", L"ドック3"};
+        int nd = Dock_Count();
+        if (nd > 3)
+            nd = 3;
+        RowText(0, RH, L"編集するドック", L"この下の設定は、選んだドックに適用されます。アイコン一覧は各ドックで独立しています", 90 * nd + 20, on);
+        Segmented(W_SEG_DKSEL, RightX(90 * nd), RowTop(0, RH) + (RH - 34) / 2, 90 * nd, dk, nd, Dock_GetEdit(), on);
+
+        RowText(1, RH, L"ドックの追加と削除", L"追加すると、まだ使っていない画面の端に空のドックが置かれます", 220, on);
+        Button(W_BTN_DKDEL, 0, RightX(210), RowTop(1, RH) + (RH - 34) / 2, 100, 34, L"削除", 0, on && nd > 1);
+        Button(W_BTN_DKADD, 0, RightX(100), RowTop(1, RH) + (RH - 34) / 2, 100, 34, L"追加", 0, on && nd < 3);
+    }
+    CardEnd();
+
     Section(L"表示");
     CardBegin(RH * 4);
     {
@@ -1729,6 +1753,28 @@ static void Activate(HWND hwnd, const Hit *h)
         Dock_SaveSettings();
         Redraw();
         break;
+    case W_SEG_DKSEL:
+        Dock_SetEdit(h->arg);
+        Redraw();
+        break;
+    case W_BTN_DKADD:
+        if (Dock_Add())
+        {
+            Dock_SaveSettings();
+            Notice(L"ドックを追加しました。画面の端に空のドックが表示されます。", FALSE);
+        }
+        else
+            Notice(L"ドックは3つまでです。", FALSE);
+        Redraw();
+        break;
+    case W_BTN_DKDEL:
+        if (Dock_Count() > 1 && Dock_RemoveAt(Dock_GetEdit()))
+        {
+            Dock_SaveSettings();
+            Notice(L"選んだドックを削除しました。", FALSE);
+        }
+        Redraw();
+        break;
     case W_SEG_DKZ:
         Dock_SetZOrder(h->arg);
         Dock_SaveSettings();
@@ -2168,12 +2214,13 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
             }
             else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE ||
-                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE || h->id == W_SEG_DKZ)
+                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE || h->id == W_SEG_DKZ || h->id == W_SEG_DKSEL)
             {
-                int n = h->id == W_SEG_DKZ ? 2 : h->id == W_SEG_DKTYPE ? Dock_TypeCount()
-                                             : h->id == W_SEG_DKSTYLE  ? Dock_StyleCount()
-                                             : h->id == W_SEG_THEME    ? 3
-                                                                       : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
+                int n = h->id == W_SEG_DKSEL ? Dock_Count() : h->id == W_SEG_DKZ   ? 2
+                                                          : h->id == W_SEG_DKTYPE  ? Dock_TypeCount()
+                                                          : h->id == W_SEG_DKSTYLE ? Dock_StyleCount()
+                                                          : h->id == W_SEG_THEME   ? 3
+                                                                                   : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
                 int a = ClampInt(h->arg + d, 0, n - 1);
                 Hit copy = *h;
                 copy.arg = a;

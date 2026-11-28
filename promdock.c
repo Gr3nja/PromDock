@@ -22,6 +22,9 @@
 
  *       右クリック > 設定 > 位置 (下・上・左・右 / 中央に戻す) で再び端に固定
 
+ *   - ドックは最大3つまで。アイコン一覧・位置・形・デザイン・重なり順などはドックごとに独立
+ *       右クリック > ドックを追加 / このドックを削除、またはアプリ設定(ドック)で増減・編集するドックを選ぶ
+ *       promdock.txt は @dock=N の行でドックごとに区切る (@dock= のない古い設定は1つ目のドックとして読む)
  *   - 重なり順: 最前列 (常に他のウィンドウの手前) / 最奥 (デスクトップの上・他のウィンドウの背面)。右クリック > 設定 > 重なり順 で切り替え
 
  *   - 全円ドック: マウスホイール または Shift+ドラッグ でアイコンを回転
@@ -142,9 +145,153 @@ typedef struct
     int br, bg, bb;
     float ba;
 } Style;
-static Style g_barStyle = {36, 36, 40, 0.78f, 0, 0, 0, 0.0f};        /* ダークグレー半透明(濃いめ)・枠線なし。fa は設定で変更可 */
-static float g_baseSize = BASE_SIZE_DEF, g_maxScale = MAX_SCALE_DEF; /* 設定(setting.c)から変更できる */
 static const Style g_labelStyle = {26, 26, 30, 0.92f, 0, 0, 0, 0.0f};
+
+/* ------------------------------------------------------------------ */
+/* 複数ドック (最大 MAX_DOCKS 個)                                         */
+/*   ドックごとの状態は DockState にまとめ、gDock が「いま処理中のドック」を指す。   */
+/*   g_xxx という名前は gDock->xxx への別名なので、描画・操作のコードはそのまま使える。 */
+/*   ウィンドウメッセージ / ドロップ / 設定からの呼び出しの入口で gDock を切り替える。  */
+/* ------------------------------------------------------------------ */
+#define MAX_DOCKS 3
+typedef struct DockState
+{
+    Item items[MAX_ITEMS];
+    int count;
+    HWND hwnd;
+    HDC memdc;
+    HBITMAP dib, oldBmp;
+    uint32_t *bits;
+    int W, H, posX, posY0;
+    float hideDelta, slide;
+    int LW, LH;
+    int edge;
+    float frac;
+    int hideMs;
+    BOOL moving, zBottom, freeMode;
+    float fx, fy;
+    POINT moveStart;
+    int moveWX, moveWY;
+    float rot, rotTarget;
+    BOOL rotating;
+    float rotLast;
+    float base, gap, padx, pady, margin, bounce;
+    float baseline, barV0, barV1, barL, barR, hoverV;
+    float cU, cV, Rref, ro0, ro1;
+    BOOL hover, tracking, animOn, menuOpen, dragged;
+    BOOL autohide;
+    int dragOut;
+    BOOL dropActive, dropOk;
+    int dropIdx;
+    float dropOpen;
+    float mouseU, mouseV;
+    int pressed;
+    POINT downPt;
+    BOOL armed;
+    DWORD leaveTick;
+    unsigned sig;
+    int style, dockType;
+    Style barStyle;
+    float baseSize, maxScale;
+    void *dt; /* IDropTarget (MyDT) */
+} DockState;
+
+static DockState *gDock;
+static DockState *g_docks[MAX_DOCKS];
+static int g_nDocks = 0;
+static int g_editDock = 0;        /* アプリ設定で編集中のドック */
+static BOOL g_dockEnabled = TRUE; /* ドック全体の有効/無効 (設定) */
+BOOL Dock_Add(void);              /* ドックを1つ追加 (右クリックメニュー・設定から) */
+#define g_dockType (gDock->dockType)
+#define g_style (gDock->style)
+#define g_barStyle (gDock->barStyle)
+#define g_baseSize (gDock->baseSize)
+#define g_maxScale (gDock->maxScale)
+#define g_items (gDock->items)
+#define g_count (gDock->count)
+#define g_hwnd (gDock->hwnd)
+#define g_memdc (gDock->memdc)
+#define g_dib (gDock->dib)
+#define g_oldBmp (gDock->oldBmp)
+#define g_bits (gDock->bits)
+#define g_W (gDock->W)
+#define g_H (gDock->H)
+#define g_posX (gDock->posX)
+#define g_posY0 (gDock->posY0)
+#define g_hideDelta (gDock->hideDelta)
+#define g_slide (gDock->slide)
+#define g_LW (gDock->LW)
+#define g_LH (gDock->LH)
+#define g_edge (gDock->edge)
+#define g_frac (gDock->frac)
+#define g_hideMs (gDock->hideMs)
+#define g_moving (gDock->moving)
+#define g_zBottom (gDock->zBottom)
+#define g_free (gDock->freeMode)
+#define g_fx (gDock->fx)
+#define g_fy (gDock->fy)
+#define g_moveStart (gDock->moveStart)
+#define g_moveWX (gDock->moveWX)
+#define g_moveWY (gDock->moveWY)
+#define g_rot (gDock->rot)
+#define g_rotTarget (gDock->rotTarget)
+#define g_rotating (gDock->rotating)
+#define g_rotLast (gDock->rotLast)
+#define g_base (gDock->base)
+#define g_gap (gDock->gap)
+#define g_padx (gDock->padx)
+#define g_pady (gDock->pady)
+#define g_margin (gDock->margin)
+#define g_bounce (gDock->bounce)
+#define g_baseline (gDock->baseline)
+#define g_barV0 (gDock->barV0)
+#define g_barV1 (gDock->barV1)
+#define g_barL (gDock->barL)
+#define g_barR (gDock->barR)
+#define g_hoverV (gDock->hoverV)
+#define g_cU (gDock->cU)
+#define g_cV (gDock->cV)
+#define g_Rref (gDock->Rref)
+#define g_ro0 (gDock->ro0)
+#define g_ro1 (gDock->ro1)
+#define g_hover (gDock->hover)
+#define g_tracking (gDock->tracking)
+#define g_animOn (gDock->animOn)
+#define g_menuOpen (gDock->menuOpen)
+#define g_dragged (gDock->dragged)
+#define g_autohide (gDock->autohide)
+#define g_dragOut (gDock->dragOut)
+#define g_dropActive (gDock->dropActive)
+#define g_dropOk (gDock->dropOk)
+#define g_dropIdx (gDock->dropIdx)
+#define g_dropOpen (gDock->dropOpen)
+#define g_mouseU (gDock->mouseU)
+#define g_mouseV (gDock->mouseV)
+#define g_pressed (gDock->pressed)
+#define g_downPt (gDock->downPt)
+#define g_armed (gDock->armed)
+#define g_leaveTick (gDock->leaveTick)
+#define g_sig (gDock->sig)
+
+static DockState *NewDock(void)
+{
+    DockState *d = (DockState *)calloc(1, sizeof(DockState));
+    if (!d)
+        return NULL;
+    d->edge = 0;
+    d->frac = 0.5f;
+    d->hideMs = 600;
+    d->fx = d->fy = 0.5f;
+    d->dragOut = -1;
+    d->pressed = -1;
+    d->baseSize = BASE_SIZE_DEF;
+    d->maxScale = MAX_SCALE_DEF;
+    d->barStyle.fr = 36;
+    d->barStyle.fg = 36;
+    d->barStyle.fb = 40;
+    d->barStyle.fa = 0.78f; /* ダークグレー半透明(濃いめ)・枠線なし。fa は設定で変更可 */
+    return d;
+}
 
 /* ------------------------------------------------------------------ */
 /* デザイン (テーマ)                                                     */
@@ -205,13 +352,11 @@ static const Theme g_themes[N_STYLES] = {
     /* 7: ノワール (黒 + シャンパンゴールドの細い縁と目印。ほぼ直角に近い角丸) */
     {L"ノワール", FALSE, 14.0f, 10.0f, 8.0f, 10.0f, 6.0f, 1.0f, {6, 6, 7, 0.95f}, {14, 14, 15, 0.95f}, FALSE, {196, 164, 104, 0.35f}, {222, 190, 130, 0.85f}, 1.0f, 0.0f, 0.0f, {0, 0, 0, 0.60f}, 10.0f, 0, 2.2f, {222, 190, 130, 1.0f}, FALSE, 0.22f, {6, 6, 7, 0.96f, 222, 190, 130, 0.50f}, 0.18f, {240, 230, 210, 1.0f}},
 };
-static int g_style = 0; /* 0:クラシック 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ */
 static const Theme *Th(void) { return &g_themes[g_style]; }
 
 /* ドックの形: 0=バー(従来) / 1=半円 (画面の端を中心にした円弧状に並ぶ) / 2=全円 (画面の端に接する完全な円環状に並ぶ)。デザインはバーと共通 */
 #define N_DOCKTYPES 3
 static const wchar_t *const g_dockTypeNames[N_DOCKTYPES] = {L"バー", L"半円", L"全円"};
-static int g_dockType = 0;
 static BOOL IsCircle(void) { return g_dockType >= 1; } /* 極座標配置 (半円・全円共通) */
 static BOOL IsRing(void) { return g_dockType == 2; }   /* 全円 (円環) */
 #define HALF_PI 1.5707963f
@@ -221,51 +366,15 @@ static float OpacityMul(void) { return g_barStyle.fa / 0.78f; }
 
 static const int g_mipSize[MIP_LEVELS] = {256, 128, 64};
 
-static Item g_items[MAX_ITEMS];
-static int g_count = 0;
-static HWND g_hwnd;
-static HDC g_memdc;
-static HBITMAP g_dib, g_oldBmp;
-static uint32_t *g_bits;
-static int g_W, g_H, g_posX, g_posY0;
-static float g_hideDelta, g_slide = 0.0f;
-static int g_LW, g_LH;                         /* 論理寸法: 軸方向の長さ / 画面端からの厚み */
-static int g_edge = 0;                         /* 0:下 1:上 2:左 3:右 */
-static float g_frac = 0.5f;                    /* 端に沿った位置 (0..1, ドック中心) */
-static int g_hideMs = 600;                     /* 自動的に隠すまでの時間(ms) */
-static BOOL g_moving;                          /* Ctrl+ドラッグで移動中 */
-static BOOL g_zBottom = FALSE;                 /* 重なり順: FALSE=最前列 / TRUE=最奥 (デスクトップの上、他のウィンドウの背面) */
-static BOOL g_free = FALSE;                    /* 自由配置 (Ctrl+ドラッグで置いた位置。端に固定しない) */
-static float g_fx = 0.5f, g_fy = 0.5f;         /* 自由配置: ウィンドウ中心の位置 (作業領域に対する割合) */
-static POINT g_moveStart;                      /* Ctrl+ドラッグ開始時のカーソル位置 (画面座標) */
-static int g_moveWX, g_moveWY;                 /* Ctrl+ドラッグ開始時のウィンドウ位置 */
-static float g_rot = 0.0f, g_rotTarget = 0.0f; /* 全円: アイコン全体の回転角 (rad, 時計回りが正) 現在値/目標値 */
-static BOOL g_rotating;                        /* Shift+ドラッグで回転中 */
-static float g_rotLast;                        /* 回転ドラッグ中の直前のカーソル角度 */
 static float g_dpi = 1.0f;
-static float g_base, g_gap, g_padx, g_pady, g_margin, g_bounce;
-static float g_baseline, g_barV0, g_barV1, g_barL, g_barR, g_hoverV; /* v: 画面端からの距離 (サークル時の g_barV0/V1/baseline/hoverV は中心からの半径) */
-static float g_cU, g_cV, g_Rref, g_ro0, g_ro1;                       /* サークル: 中心(論理座標) / 基準半径 / 帯の内径・外径 */
-static BOOL g_hover, g_tracking, g_animOn, g_menuOpen, g_dragged;
-static BOOL g_autohide = FALSE;
 static BOOL AutoHideOn(void) { return g_autohide && !g_free; } /* 自由配置中は端へ隠せないので無効 */
 
 /* ドラッグ&ドロップ状態 */
-static int g_dragOut = -1;          /* ドックの外へ引き出し中の項目 (-1: なし) */
-static BOOL g_dropActive, g_dropOk; /* 外部からのファイルドラッグ中 */
-static int g_dropIdx;               /* 挿入位置 (ピン留め内の何番目の前か) */
-static float g_dropOpen;            /* 挿入位置の隙間 0..1 */
-static HWND g_ghost;                /* ドラッグ中アイコンのゴースト窓 */
+static HWND g_ghost; /* ドラッグ中アイコンのゴースト窓 */
 static HDC g_ghostDC;
 static HBITMAP g_ghostBmp, g_ghostOld;
 static uint32_t *g_ghostBits;
 static int g_ghostAX, g_ghostAY;
-static float g_mouseU, g_mouseV; /* マウス位置 (論理座標: u=軸方向, v=端からの距離) */
-static int g_pressed = -1;
-static POINT g_downPt; /* 押下位置 (クライアント座標) */
-static BOOL g_armed;   /* 一定距離動いたらドラッグ開始 */
-static DWORD g_leaveTick;
-static unsigned g_sig;
 static wchar_t g_cfgPath[MAX_PATH];
 
 /* ラベル用キャッシュ */
@@ -276,6 +385,38 @@ static int g_lblW, g_lblH;
 /* ------------------------------------------------------------------ */
 static float Clamp01(float x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 static int ClampI(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+static BOOL SelectByHwnd(HWND h)
+{
+    for (int i = 0; i < g_nDocks; i++)
+        if (g_docks[i] && g_docks[i]->hwnd == h)
+        {
+            gDock = g_docks[i];
+            return TRUE;
+        }
+    return FALSE;
+}
+static BOOL IsDockHwnd(HWND h)
+{
+    for (int i = 0; i < g_nDocks; i++)
+        if (g_docks[i] && g_docks[i]->hwnd == h)
+            return TRUE;
+    return FALSE;
+}
+static void UseEdit(void) /* 設定から呼ばれる関数の入口: 編集中のドックを処理対象にする */
+{
+    g_editDock = ClampI(g_editDock, 0, g_nDocks > 0 ? g_nDocks - 1 : 0);
+    gDock = g_docks[g_editDock];
+}
+static void DocksInitDefault(void)
+{
+    if (g_nDocks == 0)
+    {
+        g_docks[0] = NewDock();
+        g_nDocks = 1;
+    }
+    gDock = g_docks[0];
+}
 
 /* 論理座標 (u: 軸方向, v: 画面端からの距離) <-> ウィンドウ座標。
  * 内部の計算は「下端に置いた横向きドック」で行い、ここで4方向に写す。 */
@@ -835,28 +976,37 @@ static void SaveConfig(void)
     FILE *f = _wfopen(g_cfgPath, L"wb");
     if (!f)
         return;
-    fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
-    fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
-    fprintf(f, "@style=%d\r\n@docktype=%d\r\n", g_style, g_dockType);
-    fprintf(f, "@zorder=%d\r\n", g_zBottom ? 1 : 0);
-    fprintf(f, "@free=%d\r\n@fx=%d\r\n@fy=%d\r\n", g_free ? 1 : 0, (int)floorf(g_fx * 1000.0f + 0.5f), (int)floorf(g_fy * 1000.0f + 0.5f));
-    for (int i = 0; i < g_count; i++)
+    DockState *keep = gDock;
+    fprintf(f, "@docks=%d\r\n", g_nDocks);
+    for (int di = 0; di < g_nDocks; di++)
     {
-        if (!g_items[i].pinned)
-            continue;
-        char u8[MAX_PATH * 6];
-        int n = WideCharToMultiByte(CP_UTF8, 0, g_items[i].spec, -1, u8, sizeof(u8), NULL, NULL);
-        if (n > 1)
+        gDock = g_docks[di];
+        fprintf(f, "@dock=%d\r\n", di); /* ここから次の @dock= までが、このドックの設定とアイコン一覧 */
+        fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
+        fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
+        fprintf(f, "@style=%d\r\n@docktype=%d\r\n", g_style, g_dockType);
+        fprintf(f, "@zorder=%d\r\n", g_zBottom ? 1 : 0);
+        fprintf(f, "@free=%d\r\n@fx=%d\r\n@fy=%d\r\n", g_free ? 1 : 0, (int)floorf(g_fx * 1000.0f + 0.5f), (int)floorf(g_fy * 1000.0f + 0.5f));
+        for (int i = 0; i < g_count; i++)
         {
-            fwrite(u8, 1, n - 1, f);
-            fwrite("\r\n", 1, 2, f);
+            if (!g_items[i].pinned)
+                continue;
+            char u8[MAX_PATH * 6];
+            int n = WideCharToMultiByte(CP_UTF8, 0, g_items[i].spec, -1, u8, sizeof(u8), NULL, NULL);
+            if (n > 1)
+            {
+                fwrite(u8, 1, n - 1, f);
+                fwrite("\r\n", 1, 2, f);
+            }
         }
     }
+    gDock = keep;
     fclose(f);
 }
 
 static void LoadConfig(void)
 {
+    DocksInitDefault(); /* 古い形式 (@dock= なし) の設定は、1つ目のドックとして読む */
     FILE *f = _wfopen(g_cfgPath, L"rb");
     if (!f)
     {
@@ -883,7 +1033,19 @@ static void LoadConfig(void)
         *e = 0;
         if (*p == '@')
         {
-            if (strncmp(p, "@autohide=", 10) == 0)
+            if (strncmp(p, "@dock=", 6) == 0)
+            {
+                int n = ClampI(atoi(p + 6), 0, MAX_DOCKS - 1);
+                while (g_nDocks <= n)
+                {
+                    DockState *nd = NewDock();
+                    if (!nd)
+                        break;
+                    g_docks[g_nDocks++] = nd;
+                }
+                gDock = g_docks[ClampI(n, 0, g_nDocks - 1)];
+            }
+            else if (strncmp(p, "@autohide=", 10) == 0)
                 g_autohide = atoi(p + 10) != 0;
             else if (strncmp(p, "@edge=", 6) == 0)
                 g_edge = ClampI(atoi(p + 6), 0, 3);
@@ -922,6 +1084,7 @@ static void LoadConfig(void)
         p = e;
     }
     free(buf);
+    gDock = g_docks[0];
 }
 
 /* ------------------------------------------------------------------ */
@@ -937,7 +1100,7 @@ static int g_nw;
 
 static BOOL IsTaskbarWindow(HWND h)
 {
-    if (h == g_hwnd || !IsWindowVisible(h) || GetWindow(h, GW_OWNER))
+    if (IsDockHwnd(h) || !IsWindowVisible(h) || GetWindow(h, GW_OWNER))
         return FALSE;
     if (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
         return FALSE;
@@ -2109,10 +2272,12 @@ static void EnsureTimer(void)
 /* 操作                                                                 */
 /* ------------------------------------------------------------------ */
 #define WM_LAUNCHFAIL (WM_APP + 1)
+#define WM_REMOVEDOCK (WM_APP + 2)
 typedef struct
 {
     wchar_t spec[MAX_PATH * 2];
     wchar_t path[MAX_PATH * 2];
+    HWND owner; /* 起動を頼んだドックのウィンドウ (別スレッドから失敗を知らせる先) */
 } LaunchReq;
 
 /* 起動の遅いアプリ (Discord 等) でドックが固まらないよう、別スレッドで起動する */
@@ -2131,7 +2296,7 @@ static DWORD WINAPI LaunchThread(LPVOID p)
     CoUninitialize();
     if (ok)
         free(rq);
-    else if (!PostMessageW(g_hwnd, WM_LAUNCHFAIL, 0, (LPARAM)rq))
+    else if (!PostMessageW(rq->owner, WM_LAUNCHFAIL, 0, (LPARAM)rq))
         free(rq);
     return 0;
 }
@@ -2142,6 +2307,8 @@ static void Launch(int idx)
     if (g_items[idx].launchTick && now - g_items[idx].launchTick < 2000)
         return; /* 起動待ちの連打で二重起動しない */
     LaunchReq *rq = (LaunchReq *)malloc(sizeof(LaunchReq));
+    if (rq)
+        rq->owner = g_hwnd;
     if (!rq)
         return;
     wcscpy(rq->spec, g_items[idx].spec);
@@ -2259,6 +2426,9 @@ static void ShowContextMenu(HWND hwnd, int hit)
     AppendMenuW(menu, MF_STRING | (Settings_LauncherEnabled() ? 0 : MF_GRAYED), 30, L"ランチャーを開く (F11)");
     AppendMenuW(menu, MF_STRING, 31, L"アプリ設定…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)set, L"設定");
+    AppendMenuW(menu, MF_STRING | (g_nDocks < MAX_DOCKS ? 0 : MF_GRAYED), 80, L"ドックを追加");
+    AppendMenuW(menu, MF_STRING | (g_nDocks > 1 ? 0 : MF_GRAYED), 81, L"このドックを削除");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, 2, L"ドックを終了");
 
     UINT flags = TPM_RETURNCMD;
@@ -2320,6 +2490,12 @@ static void ShowContextMenu(HWND hwnd, int hit)
         break;
     case 31:
         Settings_OpenPage(1);
+        break;
+    case 80:
+        Dock_Add();
+        break;
+    case 81:
+        PostMessageW(hwnd, WM_REMOVEDOCK, 0, 0); /* 自分のウィンドウを今ここで壊さない */
         break;
     case 60:
     case 61:
@@ -2521,6 +2697,12 @@ static void DropUpdate(POINTL pt)
     EnsureTimer();
 }
 
+typedef struct
+{
+    IDropTargetVtbl *lpVtbl;
+    HWND hwnd;
+} MyDT; /* ドックごとのドロップ先 (どのドックへのドロップか判別するため hwnd を持つ) */
+
 static HRESULT STDMETHODCALLTYPE DT_QueryInterface(IDropTarget *t, REFIID riid, void **ppv)
 {
     if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDropTarget))
@@ -2544,7 +2726,7 @@ static ULONG STDMETHODCALLTYPE DT_Release(IDropTarget *t)
 
 static HRESULT STDMETHODCALLTYPE DT_DragEnter(IDropTarget *t, IDataObject *d, DWORD ks, POINTL pt, DWORD *eff)
 {
-    (void)t;
+    SelectByHwnd(((MyDT *)t)->hwnd);
     (void)ks;
     g_dropOk = DropHasFiles(d);
     if (g_dropOk)
@@ -2555,7 +2737,7 @@ static HRESULT STDMETHODCALLTYPE DT_DragEnter(IDropTarget *t, IDataObject *d, DW
 
 static HRESULT STDMETHODCALLTYPE DT_DragOver(IDropTarget *t, DWORD ks, POINTL pt, DWORD *eff)
 {
-    (void)t;
+    SelectByHwnd(((MyDT *)t)->hwnd);
     (void)ks;
     if (g_dropOk)
         DropUpdate(pt);
@@ -2565,7 +2747,7 @@ static HRESULT STDMETHODCALLTYPE DT_DragOver(IDropTarget *t, DWORD ks, POINTL pt
 
 static HRESULT STDMETHODCALLTYPE DT_DragLeave(IDropTarget *t)
 {
-    (void)t;
+    SelectByHwnd(((MyDT *)t)->hwnd);
     g_dropActive = FALSE;
     g_dropOk = FALSE;
     g_hover = FALSE;
@@ -2576,7 +2758,7 @@ static HRESULT STDMETHODCALLTYPE DT_DragLeave(IDropTarget *t)
 
 static HRESULT STDMETHODCALLTYPE DT_Drop(IDropTarget *t, IDataObject *d, DWORD ks, POINTL pt, DWORD *eff)
 {
-    (void)t;
+    SelectByHwnd(((MyDT *)t)->hwnd);
     (void)ks;
     BOOL added = FALSE;
     if (g_dropOk)
@@ -2628,7 +2810,26 @@ static HRESULT STDMETHODCALLTYPE DT_Drop(IDropTarget *t, IDataObject *d, DWORD k
 static IDropTargetVtbl g_dtVtbl = {
     DT_QueryInterface, DT_AddRef, DT_Release,
     DT_DragEnter, DT_DragOver, DT_DragLeave, DT_Drop};
-static IDropTarget g_dropTarget = {&g_dtVtbl};
+
+/* ドックのウィンドウを作る (ドロップ先の登録まで) */
+static void CreateDockWindow(DockState *d)
+{
+    DockState *prev = gDock;
+    gDock = d; /* 作成中に届くメッセージの処理対象 */
+    d->hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        L"PromDockWnd", L"PromDock", WS_POPUP, 0, 0, 100, 100, NULL, NULL, GetModuleHandleW(NULL), NULL);
+    MyDT *dt = (MyDT *)calloc(1, sizeof(MyDT));
+    if (dt)
+    {
+        dt->lpVtbl = &g_dtVtbl;
+        dt->hwnd = d->hwnd;
+        d->dt = dt;
+        RegisterDragDrop(d->hwnd, (IDropTarget *)dt);
+    }
+    d->leaveTick = GetTickCount();
+    gDock = prev ? prev : d;
+}
 
 /* Ctrl+ドラッグ: 掴んだ位置を保ったまま、画面上の好きな場所へ制限なく移動 (端への吸着なし) */
 static void MoveDockToCursor(void)
@@ -2667,10 +2868,22 @@ static BOOL DragArmed(LPARAM lp)
     return g_armed;
 }
 
+static BOOL Dock_Remove(int i);
+BOOL Dock_Add(void);
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
+    SelectByHwnd(hwnd); /* このウィンドウのドックを処理対象にする */
     switch (msg)
     {
+    case WM_REMOVEDOCK: /* 右クリックメニューの「このドックを削除」 (メニューの処理が終わってから実行) */
+        for (int di = 0; di < g_nDocks; di++)
+            if (g_docks[di]->hwnd == hwnd)
+            {
+                Dock_Remove(di);
+                break;
+            }
+        return 0;
     case WM_MOUSEMOVE:
         if (g_moving)
         {
@@ -2932,8 +3145,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;
 
-    case WM_DESTROY:
-        PostQuitMessage(0);
+    case WM_DESTROY: /* 終了は Dock_Quit が PostQuitMessage する (ドック1つの削除では終了しない) */
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -2942,23 +3154,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 /* 設定(setting.c)からドックの有効/無効を切り替える。無効の間は隠して監視も止める */
 void Dock_SetEnabled(BOOL on)
 {
-    if (!g_hwnd)
-        return;
-    if (on)
+    g_dockEnabled = on ? TRUE : FALSE;
+    DockState *keep = gDock;
+    for (int di = 0; di < g_nDocks; di++)
     {
-        RefreshRunning();
-        ResizeDock();
-        Render();
-        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
-        SetTimer(g_hwnd, TIMER_POLL, POLL_MS, NULL);
-        if (g_autohide)
-            EnsureTimer();
+        gDock = g_docks[di];
+        if (!g_hwnd)
+            continue;
+        if (on)
+        {
+            RefreshRunning();
+            ResizeDock();
+            Render();
+            ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+            SetTimer(g_hwnd, TIMER_POLL, POLL_MS, NULL);
+            if (g_autohide)
+                EnsureTimer();
+        }
+        else
+        {
+            KillTimer(g_hwnd, TIMER_POLL);
+            ShowWindow(g_hwnd, SW_HIDE);
+        }
     }
-    else
-    {
-        KillTimer(g_hwnd, TIMER_POLL);
-        ShowWindow(g_hwnd, SW_HIDE);
-    }
+    gDock = keep ? keep : g_docks[0];
 }
 
 /* ------------------------------------------------------------------ */
@@ -2984,14 +3203,20 @@ void Dock_SaveSettings(void)
 int Dock_GetZOrder(void) { return g_zBottom ? 1 : 0; } /* 0:最前列 1:最奥 */
 void Dock_SetZOrder(int z)
 {
+    UseEdit();
     g_zBottom = z != 0;
     if (g_hwnd)
         ApplyZOrder(0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 }
 
-int Dock_GetEdge(void) { return g_edge; }
+int Dock_GetEdge(void)
+{
+    UseEdit();
+    return g_edge;
+}
 void Dock_SetEdge(int e)
 {
+    UseEdit();
     g_edge = ClampI(e, 0, 3);
     g_free = FALSE;
     DockRelayout();
@@ -2999,68 +3224,219 @@ void Dock_SetEdge(int e)
 
 void Dock_ResetPosition(void)
 {
+    UseEdit();
     g_frac = 0.5f;
     g_free = FALSE;
     DockRelayout();
 }
 
-BOOL Dock_GetAutoHide(void) { return g_autohide; }
+BOOL Dock_GetAutoHide(void)
+{
+    UseEdit();
+    return g_autohide;
+}
 void Dock_SetAutoHide(BOOL on)
 {
+    UseEdit();
     g_autohide = on ? TRUE : FALSE;
     if (g_hwnd && IsWindowVisible(g_hwnd))
         EnsureTimer();
 }
 
-int Dock_GetHideMs(void) { return g_hideMs; }
-void Dock_SetHideMs(int ms) { g_hideMs = ClampI(ms, 0, 60000); }
+int Dock_GetHideMs(void)
+{
+    UseEdit();
+    return g_hideMs;
+}
+void Dock_SetHideMs(int ms)
+{
+    UseEdit();
+    g_hideMs = ClampI(ms, 0, 60000);
+}
 
-int Dock_GetIconSize(void) { return (int)(g_baseSize + 0.5f); }
+int Dock_GetIconSize(void)
+{
+    UseEdit();
+    return (int)(g_baseSize + 0.5f);
+}
 void Dock_SetIconSize(int px)
 {
+    UseEdit();
     g_baseSize = (float)ClampI(px, 32, 96);
     DockRelayout();
 }
 
-int Dock_GetZoom(void) { return (int)(g_maxScale * 100.0f + 0.5f); }
+int Dock_GetZoom(void)
+{
+    UseEdit();
+    return (int)(g_maxScale * 100.0f + 0.5f);
+}
 void Dock_SetZoom(int pct)
 {
+    UseEdit();
     g_maxScale = ClampI(pct, 100, 200) / 100.0f;
     DockRelayout();
 }
 
-int Dock_GetOpacity(void) { return (int)(g_barStyle.fa * 100.0f + 0.5f); }
+int Dock_GetOpacity(void)
+{
+    UseEdit();
+    return (int)(g_barStyle.fa * 100.0f + 0.5f);
+}
 void Dock_SetOpacity(int pct)
 {
+    UseEdit();
     g_barStyle.fa = ClampI(pct, 30, 100) / 100.0f;
     if (g_hwnd)
         Render();
 }
 
-int Dock_GetStyle(void) { return g_style; }
+int Dock_GetStyle(void)
+{
+    UseEdit();
+    return g_style;
+}
 void Dock_SetStyle(int s)
 {
+    UseEdit();
     g_style = ClampI(s, 0, N_STYLES - 1);
     DockRelayout();
 }
-int Dock_StyleCount(void) { return N_STYLES; }
+int Dock_StyleCount(void)
+{
+    UseEdit();
+    return N_STYLES;
+}
 
-int Dock_GetType(void) { return g_dockType; }
+int Dock_GetType(void)
+{
+    UseEdit();
+    return g_dockType;
+}
 void Dock_SetType(int t)
 {
+    UseEdit();
     g_dockType = ClampI(t, 0, N_DOCKTYPES - 1);
     DockRelayout();
 }
-int Dock_TypeCount(void) { return N_DOCKTYPES; }
-const wchar_t *Dock_TypeName(int i) { return g_dockTypeNames[ClampI(i, 0, N_DOCKTYPES - 1)]; }
-const wchar_t *Dock_StyleName(int i) { return g_themes[ClampI(i, 0, N_STYLES - 1)].name; }
+int Dock_TypeCount(void)
+{
+    UseEdit();
+    return N_DOCKTYPES;
+}
+const wchar_t *Dock_TypeName(int i)
+{
+    UseEdit();
+    return g_dockTypeNames[ClampI(i, 0, N_DOCKTYPES - 1)];
+}
+const wchar_t *Dock_StyleName(int i)
+{
+    UseEdit();
+    return g_themes[ClampI(i, 0, N_STYLES - 1)].name;
+}
 
 /* タスクトレイ/設定ウィンドウからの終了用 */
 void Dock_Quit(void)
 {
-    if (g_hwnd)
-        DestroyWindow(g_hwnd);
+    for (int di = 0; di < g_nDocks; di++)
+        if (g_docks[di] && g_docks[di]->hwnd)
+            DestroyWindow(g_docks[di]->hwnd);
+    PostQuitMessage(0);
 }
+
+/* ------------------------------------------------------------------ */
+/* ドックの追加・削除・編集対象の切り替え (最大 MAX_DOCKS 個)                */
+/* ------------------------------------------------------------------ */
+int Dock_Count(void) { return g_nDocks; }
+int Dock_GetEdit(void) { return g_editDock; }
+void Dock_SetEdit(int i)
+{
+    g_editDock = ClampI(i, 0, g_nDocks - 1);
+    UseEdit();
+}
+
+static void DestroyDock(DockState *d) /* 配列から外したあとで呼ぶ */
+{
+    HWND h = d->hwnd;
+    d->hwnd = NULL;
+    if (h)
+    {
+        RevokeDragDrop(h);
+        DestroyWindow(h);
+    }
+    for (int i = 0; i < d->count; i++)
+        FreeItem(&d->items[i]);
+    if (d->memdc)
+    {
+        SelectObject(d->memdc, d->oldBmp);
+        DeleteObject(d->dib);
+        DeleteDC(d->memdc);
+    }
+    free(d->dt);
+    free(d);
+}
+
+BOOL Dock_Add(void)
+{
+    if (g_nDocks >= MAX_DOCKS)
+        return FALSE;
+    DockState *prev = gDock;
+    DockState *d = NewDock();
+    if (!d)
+        return FALSE;
+    DockState *src = g_docks[0]; /* デザインやサイズは1つ目のドックを引き継ぐ。アイコン一覧は空 (独立) */
+    d->style = src->style;
+    d->dockType = src->dockType;
+    d->baseSize = src->baseSize;
+    d->maxScale = src->maxScale;
+    d->barStyle = src->barStyle;
+    d->hideMs = src->hideMs;
+    BOOL used[4] = {FALSE, FALSE, FALSE, FALSE};
+    for (int i = 0; i < g_nDocks; i++)
+        used[g_docks[i]->edge & 3] = TRUE;
+    int e = 0;
+    while (e < 3 && used[e])
+        e++;
+    d->edge = e; /* まだ使っていない端に置く (下 > 上 > 左 > 右) */
+    g_docks[g_nDocks++] = d;
+    g_editDock = g_nDocks - 1;
+    if (g_cfgPath[0])
+    { /* 起動処理が済んでいれば、すぐにウィンドウを作って表示する */
+        CreateDockWindow(d);
+        gDock = d;
+        RefreshRunning();
+        ResizeDock();
+        Render();
+        if (g_dockEnabled)
+        {
+            ShowWindow(d->hwnd, SW_SHOWNOACTIVATE);
+            SetTimer(d->hwnd, TIMER_POLL, POLL_MS, NULL);
+        }
+        SaveConfig();
+    }
+    gDock = prev ? prev : d;
+    return TRUE;
+}
+
+static BOOL Dock_Remove(int i)
+{
+    if (g_nDocks <= 1 || i < 0 || i >= g_nDocks)
+        return FALSE;
+    DockState *d = g_docks[i];
+    for (int k = i; k < g_nDocks - 1; k++)
+        g_docks[k] = g_docks[k + 1];
+    g_docks[--g_nDocks] = NULL;
+    if (g_editDock > i)
+        g_editDock--;
+    g_editDock = ClampI(g_editDock, 0, g_nDocks - 1);
+    gDock = g_docks[0]; /* d は解放するので、別のドックへ切り替えておく */
+    DestroyDock(d);
+    gDock = g_docks[g_editDock];
+    if (g_cfgPath[0])
+        SaveConfig();
+    return TRUE;
+}
+BOOL Dock_RemoveAt(int i) { return Dock_Remove(i); }
 
 /* ------------------------------------------------------------------ */
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
@@ -3078,6 +3454,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
 
     /* 初回はここで設定ウィンドウが開き、ドック/ランチャーを有効にするか選ぶ。
        FALSE: 二重起動 (動作中のアプリの設定を開いた) か、初回設定で終了が選ばれた */
+    DocksInitDefault(); /* 設定画面がドックの値を触っても安全なように、先に1つ目のドックを用意 */
     if (!Settings_Init(hInst))
     {
         OleUninitialize();
@@ -3108,23 +3485,23 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     gc.lpszClassName = L"PromDockGhost";
     RegisterClassExW(&gc);
 
-    g_hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-        wc.lpszClassName, L"PromDock", WS_POPUP, 0, 0, 100, 100, NULL, NULL, hInst, NULL);
-
-    RegisterDragDrop(g_hwnd, &g_dropTarget);
     Launcher_Init(hInst);
     SearchBar_Init(hInst);
     PhotoFrame_Init(hInst);
     Clock_Init(hInst);
-    g_leaveTick = GetTickCount();
-    LoadConfig();
-    RefreshRunning();
-    ResizeDock();
-    Render();
+    LoadConfig(); /* ドックの数・設定・アイコン一覧を読む */
+    for (int di = 0; di < g_nDocks; di++)
+    {
+        if (!g_docks[di]->hwnd)
+            CreateDockWindow(g_docks[di]);
+        gDock = g_docks[di];
+        g_leaveTick = GetTickCount();
+        RefreshRunning();
+        ResizeDock();
+        Render();
+    }
+    gDock = g_docks[0];
     Dock_SetEnabled(Settings_DockEnabled()); /* 表示 + 実行中アプリの監視タイマー開始 (無効なら隠す) */
-    if (g_autohide)
-        EnsureTimer();
 
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0)
@@ -3136,8 +3513,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     }
 
     Settings_Shutdown();
-    for (int i = 0; i < g_count; i++)
-        FreeItem(&g_items[i]);
+    for (int di = 0; di < g_nDocks; di++)
+        for (int i = 0; i < g_docks[di]->count; i++)
+            FreeItem(&g_docks[di]->items[i]);
     free(g_lblMask);
     DestroyGhost();
     Clock_Shutdown();

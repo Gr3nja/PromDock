@@ -35,6 +35,8 @@
  *       デザインは右クリック > 設定 > デザイン、またはアプリ設定(ドック > 外観)から切り替えられる
  *       @docktype=0 (ドックの形 0:バー 1:半円 2:全円。半円は画面の端を中心にした円弧状、全円は画面の端に接する完全な円環状に並び、デザインもそのまま使える)
  *       ドックの形は右クリック > 設定 > ドックの形、またはアプリ設定(ドック > 外観)から切り替えられる
+ *   - 通知バッジ: 実行中アプリの未読数 (ウィンドウタイトルの「(3)」など) やタスクバーの点滅を、アイコンの右上に赤いバッジで表示 (notice.c)
+ *       アプリ設定(ドック > 動作 > 通知バッジ)でオン/オフ。設定は notice.ini に保存
  *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
  *   - デスクトップに置ける検索バー (searchbar.c / 同じexeにビルド。ブラウザと検索エンジンを選んで追加)
  *   - デスクトップに置ける画像・GIF (photoframe.c) と時計ウィジェット (clock.c) も同じexeにビルド
@@ -79,6 +81,11 @@ void SysMon_Shutdown(void);
 /* weather.c (デスクトップに置ける天気・気温) */
 void Weather_Init(HINSTANCE hInst);
 void Weather_Shutdown(void);
+
+void Notice_Init(HINSTANCE hInst);
+void Notice_Shutdown(void);
+int Notice_Query(const HWND *wins, int n); /* >0:未読数 / -1:数なしの通知(点滅) / 0:なし */
+void Notice_DrawBadge(uint32_t *bits, int W, int H, float right, float top, float iconPx, float dpi, int count);
 /* setting.c (アプリ設定: ドック/ランチャーの有効・無効) */
 BOOL Settings_Init(HINSTANCE hInst);
 void Settings_Open(void);
@@ -141,6 +148,7 @@ typedef struct
     HWND wins[MAX_WINS];
     int nwin;
     BOOL fg;
+    int badge; /* 通知バッジ (notice.c) >0:未読数 / -1:数なしの通知 / 0:なし */
 } Item;
 
 typedef struct
@@ -1154,6 +1162,7 @@ static unsigned CalcSig(void)
     unsigned s = (unsigned)g_count;
     for (int i = 0; i < g_count; i++)
         s = s * 31u + (unsigned)g_items[i].nwin * 7u + (g_items[i].fg ? 3u : 0u) +
+            (unsigned)(g_items[i].badge + 1) * 13u +
             (unsigned)(UINT_PTR)(g_items[i].nwin ? g_items[i].wins[0] : NULL);
     return s;
 }
@@ -1169,6 +1178,7 @@ static int RefreshRunning(void)
     {
         g_items[i].nwin = 0;
         g_items[i].fg = FALSE;
+        g_items[i].badge = 0;
     }
 
     for (int k = 0; k < g_nw; k++)
@@ -1192,6 +1202,9 @@ static int RefreshRunning(void)
                 it->fg = TRUE;
         }
     }
+    for (int i = 0; i < g_count; i++) /* 通知バッジ (タイトルの未読数 / タスクバーの点滅) */
+        if (g_items[i].nwin > 0)
+            g_items[i].badge = Notice_Query(g_items[i].wins, g_items[i].nwin);
     for (int i = g_count - 1; i >= 0; i--) /* 終了した未固定アプリを外す */
         if (!g_items[i].pinned && g_items[i].nwin == 0)
         {
@@ -2032,6 +2045,20 @@ static void DrawIndicator(const Item *it)
     DrawDot(x, y, r, c->r, c->g, c->b, c->a);
 }
 
+/* 通知バッジ: アイコンの右上に赤いバッジ (未読数) を重ねる。数が不明な通知は赤い点 */
+static void DrawNoticeBadge(const Item *it, DWORD now)
+{
+    if (it->badge == 0 || it->nwin <= 0)
+        return;
+    int dw = (int)(it->sz * Th()->iconScale + 0.5f);
+    if (dw < 4)
+        return;
+    float uc, vc, xc, yc;
+    ItemCenterUV(it, now, &uc, &vc);
+    L2W(uc, vc, &xc, &yc);
+    Notice_DrawBadge(g_bits, g_W, g_H, xc + dw * 0.5f, yc - dw * 0.5f, (float)dw, g_dpi, it->badge);
+}
+
 /* 固定項目と実行中項目の間の細い区切り線 (テーマが有効にしたときだけ) */
 static void DrawDivider(void)
 {
@@ -2279,7 +2306,10 @@ static void Render(void)
             DrawTile(&g_items[i], now, 2);
         DrawItem(&g_items[i], now);
         if (i != g_dragOut)
+        {
             DrawIndicator(&g_items[i]);
+            DrawNoticeBadge(&g_items[i], now);
+        }
     }
 
     if (g_hover && !g_dragged && g_slide < 0.5f)
@@ -3530,6 +3560,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     Clock_Init(hInst);
     SysMon_Init(hInst);
     Weather_Init(hInst);
+    Notice_Init(hInst);
     LoadConfig(); /* ドックの数・設定・アイコン一覧を読む */
     for (int di = 0; di < g_nDocks; di++)
     {
@@ -3559,6 +3590,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
             FreeItem(&g_docks[di]->items[i]);
     free(g_lblMask);
     DestroyGhost();
+    Notice_Shutdown();
     Weather_Shutdown();
     SysMon_Shutdown();
     Clock_Shutdown();

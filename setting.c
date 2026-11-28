@@ -105,6 +105,8 @@ int Dock_GetType(void);
 void Dock_SetType(int t);
 int Dock_TypeCount(void);
 const wchar_t *Dock_TypeName(int i);
+BOOL Notice_Enabled(void); /* 通知バッジ (notice.c) */
+void Notice_SetEnabled(BOOL on);
 /* launcher.c */
 void Launcher_SetEnabled(BOOL on);
 void Launcher_SetStyle(int style, int edge);
@@ -268,6 +270,7 @@ enum
     W_TG_LN,
     W_TG_AUTOSTART,
     W_TG_AUTOHIDE,
+    W_TG_NOTICE, /* ドック: 通知バッジ */
     W_SEG_THEME,
     W_SEG_EDGE,
     W_SEG_LNSTYLE,
@@ -1164,7 +1167,7 @@ static void PageDock(void)
 
     Section(L"動作");
     BOOL ah = Dock_GetAutoHide();
-    CardBegin(RH * 2);
+    CardBegin(RH * 3);
     {
         RowText(0, RH, L"自動的に隠す", L"マウスを離すと、画面の端へ隠れます", 60, on);
         Toggle(W_TG_AUTOHIDE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, ah, on);
@@ -1175,6 +1178,9 @@ static void PageDock(void)
         lb[23] = 0;
         RowText(1, RH, L"隠れるまでの時間", L"マウスを離してから隠れるまでの待ち時間", 290, on && ah);
         Slider(W_SL_HIDEMS, RightX(280), RowTop(1, RH) + (RH - 32) / 2, 280, ms, lb, on && ah);
+
+        RowText(2, RH, L"通知バッジ", L"アプリの未読数 (タイトルの「(3)」など) やタスクバーの点滅を、アイコンの右上に赤いバッジで表示します", 60, on);
+        Toggle(W_TG_NOTICE, RightX(44), RowTop(2, RH) + (RH - 24) / 2, Notice_Enabled(), on);
     }
     CardEnd();
 
@@ -2198,6 +2204,10 @@ static void Activate(HWND hwnd, const Hit *h)
     case W_TG_AUTOHIDE:
         Dock_SetAutoHide(!Dock_GetAutoHide());
         Dock_SaveSettings();
+        Redraw();
+        break;
+    case W_TG_NOTICE:
+        Notice_SetEnabled(!Notice_Enabled());
         Redraw();
         break;
     case W_SEG_THEME:

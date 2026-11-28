@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  PromDock build script (MSVC)
-rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c + photoframe.c + clock.c + weather.c + wallpaper.c + sysmon.c を1つのexeに)
+rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c + photoframe.c + clock.c + weather.c + wallpaper.c + sysmon.c + notice.c を1つのexeに)
 rem    build.bat run    : build and launch
 rem
 rem  Works in any of these situations:
@@ -62,6 +62,11 @@ if not exist "sysmon.c" (
     set "RC=1"
     goto :done
 )
+if not exist "notice.c" (
+    echo [ERROR] notice.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
 
 rem --- 1) already in a developer prompt? ---
 where cl >nul 2>nul
@@ -116,7 +121,7 @@ if exist "promdock.ico" if exist "promdock.rc" (
 )
 
 echo Building PromDock ...
-cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c photoframe.c clock.c weather.c wallpaper.c sysmon.c %RES% /link /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c photoframe.c clock.c weather.c wallpaper.c sysmon.c notice.c %RES% /link /SUBSYSTEM:WINDOWS
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed.

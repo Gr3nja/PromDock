@@ -845,7 +845,7 @@ static BOOL AtDesktopLevel(HWND h)
 {
     HWND w = GetWindow(h, GW_HWNDNEXT);
     while (w && (ClassIs(w, L"PromSearchBarWnd") || ClassIs(w, L"PromPhotoFrameWnd") ||
-                 ClassIs(w, L"PromClockWnd"))) /* 他の検索バー・画像・時計は飛ばす */
+                 ClassIs(w, L"PromClockWnd") || ClassIs(w, L"PromWeatherWnd") || ClassIs(w, L"PromSysMonWnd"))) /* 他の検索バー・画像・時計・天気は飛ばす */
         w = GetWindow(w, GW_HWNDNEXT);
     return w && IsDesktopHost(w);
 }

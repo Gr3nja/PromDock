@@ -19,6 +19,8 @@
  *     検索バー  : ブラウザと検索エンジンを選んで追加・削除 / 位置の移動        (保存先: searchbar.ini)
  *     画像・GIF追加: 画像・GIF と大きさを選んで追加・削除 / 大きさの変更 / ドラッグ移動の許可 (保存先: photoframe.ini)
  *     時計      : デスクトップの時計 (デジタル/アナログ・デザイン・24時間・秒・日付・大きさ・背景の濃さ・位置)  (保存先: clock.ini)
+ *     システムモニタ: CPU・メモリ・ディスク・ネットワークの使用状況 (デザイン・項目・更新間隔・大きさ・背景の濃さ・位置)  (保存先: sysmon.ini)
+ *     壁紙      : 動く壁紙 (内蔵アニメ / 画像・GIF / 動画 mp4・フレームレート・速さ)  (保存先: wallpaper.ini / 実体は wallpaper.c)
  *
  *   - アプリ全体の設定は exe と同じフォルダの settings.ini に保存
  *       [PromDock]
@@ -33,11 +35,13 @@
  *     Settings_DockEnabled()      ... ドックが有効か
  *     Settings_LauncherEnabled()  ... ランチャーが有効か
  *     Settings_Open()             ... 設定ウィンドウを開く (最後に見ていたページ)
- *     Settings_OpenPage(page)     ... 指定ページで開く (0:全般 1:ドック 2:ランチャー 3:検索バー 4:画像・GIF追加 5:時計)
+ *     Settings_OpenPage(page)     ... 指定ページで開く (0:全般 1:ドック 2:ランチャー 3:検索バー 4:画像・GIF追加 5:時計 6:天気 7:壁紙 8:システムモニタ)
  *     Settings_PreTranslate(msg)  ... メッセージループで TranslateMessage の前に呼ぶ
  *     Settings_RefreshSearchBar() ... 検索バーの一覧・ボタン表示を更新 (searchbar.c から呼ばれる)
  *     Settings_RefreshPhotoFrame() ... 画像・GIF追加の一覧・ボタン表示を更新 (photoframe.c から呼ばれる)
  *     Settings_RefreshClock()      ... 時計ページの表示を更新 (clock.c から呼ばれる)
+ *     Settings_RefreshWeather()    ... 天気ページの表示を更新 (weather.c から呼ばれる)
+ *     Settings_RefreshSysMon()     ... システムモニタページの表示を更新 (sysmon.c から呼ばれる)
  *     Settings_Shutdown()         ... 終了時に1回
  */
 #define _CRT_SECURE_NO_WARNINGS
@@ -154,6 +158,72 @@ void Clock_SetOpacity(int pct);
 BOOL Clock_Movable(void);
 void Clock_SetMovable(BOOL on);
 void Clock_ResetPosition(void);
+/* sysmon.c */
+BOOL SysMon_Enabled(void);
+void SysMon_SetEnabled(BOOL on);
+int SysMon_GetVariant(void);
+void SysMon_SetVariant(int v);
+int SysMon_VariantCount(void);
+const wchar_t *SysMon_VariantName(int i);
+BOOL SysMon_GetItem(int i);
+void SysMon_SetItem(int i, BOOL on);
+int SysMon_GetInterval(void);
+void SysMon_SetInterval(int i);
+int SysMon_GetSize(void);
+void SysMon_SetSize(int pct);
+int SysMon_GetOpacity(void);
+void SysMon_SetOpacity(int pct);
+BOOL SysMon_Movable(void);
+void SysMon_SetMovable(BOOL on);
+void SysMon_ResetPosition(void);
+
+/* weather.c (デスクトップ天気) */
+BOOL Weather_Enabled(void);
+void Weather_SetEnabled(BOOL on);
+int Weather_GetVariant(void);
+void Weather_SetVariant(int v);
+int Weather_VariantCount(void);
+const wchar_t *Weather_VariantName(int i);
+int Weather_CityCount(void);
+const wchar_t *Weather_CityName(int i);
+int Weather_GetCity(void);
+void Weather_SetCity(int i);
+void Weather_LocLabel(wchar_t *out, int cch);
+void Weather_GetLatLon(double *lat, double *lon);
+BOOL Weather_PickCoords(HWND owner);
+int Weather_GetUnit(void);
+void Weather_SetUnit(int unit);
+int Weather_GetSize(void);
+void Weather_SetSize(int pct);
+int Weather_GetOpacity(void);
+void Weather_SetOpacity(int pct);
+BOOL Weather_Movable(void);
+void Weather_SetMovable(BOOL on);
+void Weather_ResetPosition(void);
+void Weather_Refresh(void);
+void Weather_Status(wchar_t *out, int cch);
+
+/* wallpaper.c (動く壁紙) */
+void Wallpaper_Init(HINSTANCE hInst);
+void Wallpaper_Shutdown(void);
+BOOL Wallpaper_Enabled(void);
+void Wallpaper_SetEnabled(BOOL on);
+int Wallpaper_GetKind(void);
+void Wallpaper_SetKind(int k);
+int Wallpaper_KindCount(void);
+const wchar_t *Wallpaper_KindName(int i);
+BOOL Wallpaper_KindIsFile(int i);
+BOOL Wallpaper_KindIsVideo(int i);
+BOOL Wallpaper_HasVideo(void);
+void Wallpaper_VideoLabel(wchar_t *out, int cch);
+BOOL Wallpaper_PickVideo(HWND owner);
+BOOL Wallpaper_HasFile(void);
+int Wallpaper_GetFps(void);
+void Wallpaper_SetFps(int i);
+int Wallpaper_GetSpeed(void);
+void Wallpaper_SetSpeed(int i);
+void Wallpaper_FileLabel(wchar_t *out, int cch);
+BOOL Wallpaper_PickFile(HWND owner);
 
 /* このファイルが公開する関数 */
 BOOL Settings_Init(HINSTANCE hInst);
@@ -168,6 +238,8 @@ void Settings_Shutdown(void);
 void Settings_RefreshSearchBar(void);
 void Settings_RefreshPhotoFrame(void);
 void Settings_RefreshClock(void);
+void Settings_RefreshWeather(void);
+void Settings_RefreshSysMon(void);
 
 #define WM_TRAY (WM_APP + 10)
 #define WM_SHOWSETTINGS (WM_APP + 11)
@@ -210,7 +282,11 @@ enum
     W_SL_OPACITY,
     W_SL_PFSIZE, /* 画像・GIF追加: 追加するときの大きさ (W_SL_OPACITY の直後に置くこと: スライダーの範囲判定に使う) */
     W_SL_CLSIZE, /* 時計: 大きさ */
-    W_SL_CLOPA,  /* 時計: 背景の濃さ (スライダーはここまで) */
+    W_SL_CLOPA,  /* 時計: 背景の濃さ */
+    W_SL_WSIZE,  /* 天気: 大きさ */
+    W_SL_WOPA,   /* 天気: 背景の濃さ */
+    W_SL_SMSIZE, /* システムモニタ: 大きさ */
+    W_SL_SMOPA,  /* システムモニタ: 背景の濃さ (スライダーはここまで) */
     W_STP_COLS,
     W_STP_ROWS,
     W_DD_HOTKEY,
@@ -236,6 +312,30 @@ enum
     W_TG_CLDATE,
     W_TG_CLMOVE,
     W_BTN_CLRESET,
+    W_TG_WEATHER,    /* 天気: 表示 */
+    W_SEG_WVAR,      /* 天気: デザイン */
+    W_SEG_WUNIT,     /* 天気: 単位 (℃ / ℉) */
+    W_DD_WCITY,      /* 天気: 場所 */
+    W_DD_WVAR,       /* 天気: デザイン */
+    W_BTN_WCOORD,    /* 天気: 緯度・経度を入力 */
+    W_BTN_WREFRESH,  /* 天気: 今すぐ更新 */
+    W_TG_WMOVE,      /* 天気: ドラッグ移動 */
+    W_BTN_WRESET,    /* 天気: 位置のリセット */
+    W_TG_WALL,       /* 壁紙: 表示 */
+    W_DD_WALLKIND,   /* 壁紙: 種類 */
+    W_BTN_WALLFILE,  /* 壁紙: 画像・GIF を選ぶ */
+    W_BTN_WALLVIDEO, /* 壁紙: 動画を選ぶ */
+    W_SEG_WALLFPS,   /* 壁紙: フレームレート */
+    W_SEG_WALLSPD,   /* 壁紙: 速さ */
+    W_TG_SMON,       /* システムモニタ: 表示 */
+    W_DD_SMVAR,      /* システムモニタ: デザイン (ドロップダウン) */
+    W_SEG_SMINT,     /* システムモニタ: 更新間隔 */
+    W_TG_SMCPU,      /* システムモニタ: CPU */
+    W_TG_SMMEM,      /* システムモニタ: メモリ */
+    W_TG_SMDISK,     /* システムモニタ: ディスク */
+    W_TG_SMNET,      /* システムモニタ: ネットワーク */
+    W_TG_SMMOVE,     /* システムモニタ: ドラッグ移動 */
+    W_BTN_SMRESET,   /* システムモニタ: 位置のリセット */
     W_BTN_OK,
     W_BTN_EXIT,
     W_COUNT
@@ -249,6 +349,9 @@ enum
     PAGE_SEARCH,
     PAGE_PHOTO,
     PAGE_CLOCK,
+    PAGE_WEATHER,
+    PAGE_WALLPAPER,
+    PAGE_SYSMON,
     PAGE_COUNT
 };
 
@@ -414,8 +517,6 @@ static void LoadSettings(void)
     g_lnStyle = GetPrivateProfileIntW(L"PromDock", L"launcher_style", 0, g_ini) ? 1 : 0;
     g_lnEdge = ClampInt((int)GetPrivateProfileIntW(L"PromDock", L"launcher_edge", 0, g_ini), 0, 3);
     g_theme = ClampInt((int)GetPrivateProfileIntW(L"PromDock", L"theme", 0, g_ini), 0, 2);
-    if (!g_dockOn && !g_lnOn)
-        g_dockOn = TRUE;
 }
 
 static void SaveSettings(void)
@@ -826,6 +927,18 @@ static void SliderRange(int id, int *mn, int *mx, int *step)
     case W_SL_CLOPA:
         *mn = 30, *mx = 100, *step = 5;
         break;
+    case W_SL_WSIZE:
+        *mn = 60, *mx = 200, *step = 10;
+        break;
+    case W_SL_WOPA:
+        *mn = 30, *mx = 100, *step = 5;
+        break;
+    case W_SL_SMSIZE:
+        *mn = 60, *mx = 200, *step = 10;
+        break;
+    case W_SL_SMOPA:
+        *mn = 30, *mx = 100, *step = 5;
+        break;
     default: /* W_SL_OPACITY */
         *mn = 30, *mx = 100, *step = 5;
         break;
@@ -936,7 +1049,7 @@ static void PageGeneral(void)
     }
 
     Section(L"機能");
-    CardBegin(RH * 5);
+    CardBegin(RH * 8);
     {
         RowText(0, RH, L"ドック", L"画面の端にアプリを並べて、ワンクリックで起動・切り替え", 150, TRUE);
         int t = RowTop(0, RH);
@@ -965,6 +1078,21 @@ static void PageGeneral(void)
         t = RowTop(4, RH);
         Toggle(W_TG_CLOCK, RightX(44), t + (RH - 24) / 2, Clock_Enabled(), TRUE);
         Button(W_GOTO, PAGE_CLOCK, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        RowText(5, RH, L"天気", L"デスクトップに置く、天気と気温 (場所は選べます)", 150, TRUE);
+        t = RowTop(5, RH);
+        Toggle(W_TG_WEATHER, RightX(44), t + (RH - 24) / 2, Weather_Enabled(), TRUE);
+        Button(W_GOTO, PAGE_WEATHER, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        RowText(6, RH, L"壁紙（試験的）", L"オーロラ・星空などの内蔵アニメや、GIF を壁紙にする", 150, TRUE);
+        t = RowTop(6, RH);
+        Toggle(W_TG_WALL, RightX(44), t + (RH - 24) / 2, Wallpaper_Enabled(), TRUE);
+        Button(W_GOTO, PAGE_WALLPAPER, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
+
+        RowText(7, RH, L"システムモニタ", L"デスクトップに置く、CPU・メモリ・ディスク・通信速度の表示", 150, TRUE);
+        t = RowTop(7, RH);
+        Toggle(W_TG_SMON, RightX(44), t + (RH - 24) / 2, SysMon_Enabled(), TRUE);
+        Button(W_GOTO, PAGE_SYSMON, RightX(44) - 12 - 88, t + (RH - 34) / 2, 88, 34, L"詳細設定", 0, TRUE);
     }
     CardEnd();
 
@@ -1351,17 +1479,268 @@ static void PageClock(void)
     Hint(L"デスクトップの時計を右クリックしても、デザインの変更や非表示ができます。");
 }
 
+/* システムモニタのアイコン (棒グラフ) */
+static void SysMonGlyph(float cx, float cy, uint32_t c, uint32_t bg)
+{
+    (void)bg;
+    static const float hs[3] = {7.0f, 13.0f, 10.0f};
+    for (int i = 0; i < 3; i++)
+    {
+        float x = cx - 8.0f + i * 6.0f;
+        FillRRd(x * g_dpi, FY(0) + (cy + 8.0f - hs[i]) * g_dpi, (x + 4.0f) * g_dpi, FY(0) + (cy + 8.0f) * g_dpi,
+                1.2f * g_dpi, c, 1.0f);
+    }
+}
+
+static void PageSysMon(void)
+{
+    BOOL on = SysMon_Enabled();
+    Section(L"システムモニタ");
+    CardBegin(RH);
+    {
+        RowText(0, RH, L"デスクトップにシステムモニタを表示", L"オンにすると、CPU・メモリなどの使用状況がデスクトップに現れます", 60, TRUE);
+        Toggle(W_TG_SMON, RightX(44), RowTop(0, RH) + (RH - 24) / 2, on, TRUE);
+    }
+    CardEnd();
+
+    Section(L"デザイン");
+    CardBegin(RH * 4);
+    {
+        static const wchar_t *const vd[] = {
+            L"項目ごとに、横長の棒グラフで使用率を表示します",
+            L"項目を横に並べて、円形のメーターで表示します",
+            L"文字だけで、1行ずつ表示します",
+            L"直近1分ほどの推移を、項目ごとの線グラフで表示します (ネットワークは受信・送信の2本線)",
+            L"推移の線の下を塗りつぶした、エリアグラフで表示します",
+            L"LED のような細かい区切りのメーターで表示します",
+            L"半円のメーター (スピードメーター風) を横に並べて表示します",
+            L"縦長の棒を横に並べて表示します",
+            L"小さな丸い帯を横一列に並べて、コンパクトに表示します"};
+        int var = SysMon_GetVariant();
+        RowText(0, RH, L"デザイン", L"9種類から選べます", 230, on);
+        Dropdown(W_DD_SMVAR, RightX(220), RowTop(0, RH) + (RH - 34) / 2, 220, SysMon_VariantName(var), on);
+
+        RowText(1, RH, L"このデザインの表示内容", vd[ClampInt(var, 0, 8)], 0, on);
+
+        wchar_t lb[16];
+        _snwprintf(lb, 16, L"%d%%", SysMon_GetSize());
+        lb[15] = 0;
+        RowText(2, RH, L"大きさ", L"モニタ全体の大きさ", 300, on);
+        Slider(W_SL_SMSIZE, RightX(290), RowTop(2, RH) + (RH - 32) / 2, 290, SysMon_GetSize(), lb, on);
+
+        _snwprintf(lb, 16, L"%d%%", SysMon_GetOpacity());
+        lb[15] = 0;
+        RowText(3, RH, L"背景の濃さ", L"薄くすると透けます (ピルは1つずつの背景の濃さ)", 300, on);
+        Slider(W_SL_SMOPA, RightX(290), RowTop(3, RH) + (RH - 32) / 2, 290, SysMon_GetOpacity(), lb, on);
+    }
+    CardEnd();
+
+    Section(L"表示する項目");
+    CardBegin(RH * 5);
+    {
+        RowText(0, RH, L"CPU", L"CPU の使用率", 60, on);
+        Toggle(W_TG_SMCPU, RightX(44), RowTop(0, RH) + (RH - 24) / 2, SysMon_GetItem(0), on);
+        RowText(1, RH, L"メモリ", L"メモリの使用率と使用量", 60, on);
+        Toggle(W_TG_SMMEM, RightX(44), RowTop(1, RH) + (RH - 24) / 2, SysMon_GetItem(1), on);
+        RowText(2, RH, L"ディスク", L"Windows があるドライブの使用率と空き容量", 60, on);
+        Toggle(W_TG_SMDISK, RightX(44), RowTop(2, RH) + (RH - 24) / 2, SysMon_GetItem(2), on);
+        RowText(3, RH, L"ネットワーク", L"受信 (↓) と送信 (↑) の速さ", 60, on);
+        Toggle(W_TG_SMNET, RightX(44), RowTop(3, RH) + (RH - 24) / 2, SysMon_GetItem(3), on);
+
+        static const wchar_t *const iv[] = {L"1秒", L"2秒", L"5秒"};
+        RowText(4, RH, L"更新間隔", L"短いほど細かく動きますが、わずかに負荷が増えます", 260, on);
+        Segmented(W_SEG_SMINT, RightX(180), RowTop(4, RH) + (RH - 34) / 2, 180, iv, 3, SysMon_GetInterval(), on);
+    }
+    CardEnd();
+
+    Section(L"配置");
+    CardBegin(RH * 2);
+    {
+        BOOL mv = SysMon_Movable();
+        RowText(0, RH, L"ドラッグで移動できるようにする",
+                mv ? L"オフにすると、モニタを誤って動かさなくなります" : L"オンにすると、モニタをドラッグで好きな場所へ置けます", 60,
+                TRUE);
+        Toggle(W_TG_SMMOVE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, mv, TRUE);
+
+        RowText(1, RH, L"位置をリセット", L"モニタを初期位置 (画面の右上) に戻します", 140, on);
+        Button(W_BTN_SMRESET, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"初期位置に戻す", 0, on);
+    }
+    CardEnd();
+    Hint(L"最後の1項目は消せません。デスクトップのモニタを右クリックしても、設定を変えられます。");
+}
+
+/* 天気のアイコン (太陽 + 雲)。bg は雲の縁を抜くための背景色 */
+static void WeatherGlyph(float cx, float cy, uint32_t c, uint32_t bg)
+{
+    Dot(cx - 4.5f, cy - 4.5f, 3.6f, c, 1.0f);
+    Ln(cx - 4.5f, cy - 10.5f, cx - 4.5f, cy - 8.8f, 1.5f, c, 1.0f);
+    Ln(cx - 10.5f, cy - 4.5f, cx - 8.8f, cy - 4.5f, 1.5f, c, 1.0f);
+    Ln(cx - 8.8f, cy - 8.8f, cx - 7.6f, cy - 7.6f, 1.5f, c, 1.0f);
+    Dot(cx + 1.0f, cy + 1.0f, 6.0f, bg, 1.0f); /* 雲の縁 (太陽を少し隠す) */
+    Dot(cx - 1.5f, cy + 3.0f, 4.0f, c, 1.0f);
+    Dot(cx + 2.5f, cy + 0.5f, 5.0f, c, 1.0f);
+    Dot(cx + 7.0f, cy + 3.5f, 3.4f, c, 1.0f);
+    Ln(cx - 1.5f, cy + 6.4f, cx + 7.0f, cy + 6.4f, 3.4f, c, 1.0f);
+}
+
+static void PageWeather(void)
+{
+    BOOL on = Weather_Enabled();
+    int var = Weather_GetVariant();
+    Section(L"天気");
+    CardBegin(RH);
+    {
+        RowText(0, RH, L"デスクトップに天気を表示", L"オンにすると、デスクトップに天気と気温が現れます", 60, TRUE);
+        Toggle(W_TG_WEATHER, RightX(44), RowTop(0, RH) + (RH - 24) / 2, on, TRUE);
+    }
+    CardEnd();
+
+    Section(L"場所");
+    CardBegin(RH * 2);
+    {
+        wchar_t lb[96];
+        Weather_LocLabel(lb, 96);
+        RowText(0, RH, L"場所", L"リストの最後で緯度・経度も指定できます", 250, TRUE);
+        Dropdown(W_DD_WCITY, RightX(240), RowTop(0, RH) + (RH - 34) / 2, 240, lb, TRUE);
+
+        double la, lo;
+        Weather_GetLatLon(&la, &lo);
+        wchar_t d[96];
+        _snwprintf(d, 96, L"いまの場所: 緯度 %.4f  /  経度 %.4f", la, lo);
+        d[95] = 0;
+        RowText(1, RH, L"緯度・経度を入力", d, 140, TRUE);
+        Button(W_BTN_WCOORD, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"入力する…", 0, TRUE);
+    }
+    CardEnd();
+
+    Section(L"デザイン");
+    CardBegin(RH * 5);
+    {
+        static const wchar_t *const vd[] = {
+            L"天気・気温・湿度・最高/最低気温を、カードにまとめて表示します",
+            L"背景なしで、天気アイコンと大きな気温・場所・天気だけを表示します",
+            L"いまの天気に加えて、今日から5日分の予報 (天気と最高/最低気温) を表示します",
+            L"縦長のカードに、気温・天気・最高/最低・湿度・風を表示します",
+            L"小さな丸い帯に、アイコンと気温・場所だけを表示します",
+            L"いまの天気と、今日から5日分の予報を縦に並べて表示します",
+            L"青い背景のカードに、天気・気温・湿度・最高/最低を表示します",
+            L"背景なしで、大きな天気アイコンと気温・天気・場所を表示します",
+            L"背景なしで、気温だけをとても大きく表示します"};
+        static const wchar_t *const un[] = {L"℃", L"℉"};
+        RowText(0, RH, L"デザイン", L"デザインごとに表示される内容が変わります", 230, on);
+        Dropdown(W_DD_WVAR, RightX(220), RowTop(0, RH) + (RH - 34) / 2, 220, Weather_VariantName(var), on);
+
+        RowText(1, RH, L"このデザインの表示内容", vd[ClampInt(var, 0, 8)], 0, on);
+
+        RowText(2, RH, L"気温の単位", L"摂氏 (℃) か華氏 (℉) か", 150, on);
+        Segmented(W_SEG_WUNIT, RightX(140), RowTop(2, RH) + (RH - 34) / 2, 140, un, 2, Weather_GetUnit(), on);
+
+        wchar_t lb[16];
+        _snwprintf(lb, 16, L"%d%%", Weather_GetSize());
+        lb[15] = 0;
+        RowText(3, RH, L"大きさ", L"天気ウィジェット全体の大きさ", 300, on);
+        Slider(W_SL_WSIZE, RightX(290), RowTop(3, RH) + (RH - 32) / 2, 290, Weather_GetSize(), lb, on);
+
+        _snwprintf(lb, 16, L"%d%%", Weather_GetOpacity());
+        lb[15] = 0;
+        RowText(4, RH, L"背景の濃さ", L"背景があるデザインで有効です", 300, on);
+        Slider(W_SL_WOPA, RightX(290), RowTop(4, RH) + (RH - 32) / 2, 290, Weather_GetOpacity(), lb, on);
+    }
+    CardEnd();
+
+    Section(L"更新");
+    CardBegin(RH);
+    {
+        wchar_t st[96];
+        Weather_Status(st, 96);
+        RowText(0, RH, L"天気データ", st, 140, on);
+        Button(W_BTN_WREFRESH, 0, RightX(130), RowTop(0, RH) + (RH - 34) / 2, 130, 34, L"今すぐ更新", 0, on);
+    }
+    CardEnd();
+
+    Section(L"配置");
+    CardBegin(RH * 2);
+    {
+        BOOL mv = Weather_Movable();
+        RowText(0, RH, L"ドラッグで移動できるようにする",
+                mv ? L"オフにすると、天気を誤って動かさなくなります" : L"オンにすると、天気をドラッグで好きな場所へ置けます", 60,
+                TRUE);
+        Toggle(W_TG_WMOVE, RightX(44), RowTop(0, RH) + (RH - 24) / 2, mv, TRUE);
+
+        RowText(1, RH, L"位置をリセット", L"天気を画面の左上に戻します", 140, on);
+        Button(W_BTN_WRESET, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"左上に戻す", 0, on);
+    }
+    CardEnd();
+    Hint(L"天気は Open-Meteo (open-meteo.com) からインターネット経由で取得し、30分ごとに更新します。デスクトップの天気を右クリックしても、デザイン・場所・単位を変えられます。");
+}
+
+/* 壁紙のアイコン (モニター + 波) */
+static void WallpaperGlyph(float cx, float cy, uint32_t c, uint32_t bg)
+{
+    Dot(cx, cy - 1.0f, 9.0f, c, 1.0f);
+    Dot(cx, cy - 1.0f, 7.4f, bg, 1.0f);
+    Ln(cx - 5.0f, cy + 1.0f, cx - 2.0f, cy - 2.5f, 1.6f, c, 1.0f);
+    Ln(cx - 2.0f, cy - 2.5f, cx + 1.5f, cy + 1.0f, 1.6f, c, 1.0f);
+    Ln(cx + 1.5f, cy + 1.0f, cx + 5.0f, cy - 2.0f, 1.6f, c, 1.0f);
+}
+
+static void PageWallpaper(void)
+{
+    BOOL on = Wallpaper_Enabled();
+    int kind = Wallpaper_GetKind();
+    Section(L"壁紙（試験的）");
+    CardBegin(RH);
+    {
+        RowText(0, RH, L"壁紙（試験的）を使う", L"オンにすると、デスクトップの壁紙が動きます", 60, TRUE);
+        Toggle(W_TG_WALL, RightX(44), RowTop(0, RH) + (RH - 24) / 2, on, TRUE);
+    }
+    CardEnd();
+
+    Section(L"種類");
+    CardBegin(RH * 3);
+    {
+        wchar_t d[MAX_PATH + 16];
+        RowText(0, RH, L"壁紙の種類", L"内蔵アニメ・画像・GIF・動画 (mp4) から選べます", 230, on);
+        Dropdown(W_DD_WALLKIND, RightX(220), RowTop(0, RH) + (RH - 34) / 2, 220, Wallpaper_KindName(kind), on);
+
+        Wallpaper_FileLabel(d, MAX_PATH + 16);
+        RowText(1, RH, L"画像・GIF", d, 140, on);
+        Button(W_BTN_WALLFILE, 0, RightX(130), RowTop(1, RH) + (RH - 34) / 2, 130, 34, L"ファイルを選ぶ", 1, on);
+
+        Wallpaper_VideoLabel(d, MAX_PATH + 16);
+        RowText(2, RH, L"動画 (mp4)", d, 140, on);
+        Button(W_BTN_WALLVIDEO, 0, RightX(130), RowTop(2, RH) + (RH - 34) / 2, 130, 34, L"ファイルを選ぶ", 1, on);
+    }
+    CardEnd();
+
+    Section(L"動き");
+    CardBegin(RH * 2);
+    {
+        static const wchar_t *const fp[] = {L"15", L"30", L"60"};
+        static const wchar_t *const sp[] = {L"ゆっくり", L"ふつう", L"はやい"};
+        RowText(0, RH, L"フレームレート (fps)", L"大きいほどなめらかですが、CPU を多く使います", 230, on);
+        Segmented(W_SEG_WALLFPS, RightX(210), RowTop(0, RH) + (RH - 34) / 2, 210, fp, 3, Wallpaper_GetFps(), on);
+        RowText(1, RH, L"速さ", L"内蔵アニメの動く速さ (GIF・動画は元の速さのまま)", 230, on);
+        Segmented(W_SEG_WALLSPD, RightX(210), RowTop(1, RH) + (RH - 34) / 2, 210, sp, 3, Wallpaper_GetSpeed(), on);
+    }
+    CardEnd();
+    Hint(L"フルスクリーンのゲーム・動画・プレゼンが前面にあるときは、自動で一時停止します。オフにすると元の壁紙に戻ります。");
+}
+
 /* ------------------------------------------------------------------ */
 /* サイドバー / ヘッダー / フッター / 全体                                  */
 /* ------------------------------------------------------------------ */
-static const wchar_t *const kNavName[PAGE_COUNT] = {L"全般", L"ドック", L"ランチャー", L"検索バー", L"画像・GIF追加", L"時計"};
+static const wchar_t *const kNavName[PAGE_COUNT] = {L"全般", L"ドック", L"ランチャー", L"検索バー", L"画像・GIF追加", L"時計", L"天気", L"壁紙（試験的）", L"システムモニタ"};
 static const wchar_t *const kPageSub[PAGE_COUNT] = {
     L"使う機能の切り替えと、アプリ全体の設定です。",
     L"画面の端に置く、アプリのランチバーの設定です。",
     L"全画面で開くアプリ一覧の設定です。",
     L"デスクトップに置ける検索バーを管理します。",
     L"デスクトップに置く画像・GIF アニメを管理します。",
-    L"デスクトップに置く時計ウィジェットの設定です。"};
+    L"デスクトップに置く時計ウィジェットの設定です。",
+    L"デスクトップに置く天気・気温ウィジェットの設定です。",
+    L"デスクトップの壁紙を動かします (内蔵アニメ / 画像・GIF)。",
+    L"CPU・メモリ・ディスク・ネットワークの使用状況を表示します。"};
 
 static void NavIcon(int page, float cx, float cy, uint32_t c)
 {
@@ -1394,6 +1773,15 @@ static void NavIcon(int page, float cx, float cy, uint32_t c)
         break;
     case PAGE_CLOCK:
         ClockGlyph(cx, cy, c, g_pal->side);
+        break;
+    case PAGE_WEATHER:
+        WeatherGlyph(cx, cy, c, g_pal->side);
+        break;
+    case PAGE_WALLPAPER:
+        WallpaperGlyph(cx, cy, c, g_pal->side);
+        break;
+    case PAGE_SYSMON:
+        SysMonGlyph(cx, cy, c, g_pal->side);
         break;
     default: /* 虫眼鏡 */
         Dot(cx - 2, cy - 2, 6.2f, c, 1.0f);
@@ -1528,6 +1916,15 @@ static void DrawAll(void)
     case PAGE_CLOCK:
         PageClock();
         break;
+    case PAGE_WEATHER:
+        PageWeather();
+        break;
+    case PAGE_WALLPAPER:
+        PageWallpaper();
+        break;
+    case PAGE_SYSMON:
+        PageSysMon();
+        break;
     default:
         PageSearch();
         break;
@@ -1562,7 +1959,7 @@ static void SetPage(int p)
     Redraw();
 }
 
-/* ドック/ランチャーの有効・無効 (どちらか一方は必ず有効) */
+/* ドック/ランチャーの有効・無効 (両方無効でもよい。その場合もタスクトレイから設定を開ける) */
 static void ToggleFeature(int which)
 {
     BOOL d = g_dockOn, l = g_lnOn;
@@ -1570,11 +1967,6 @@ static void ToggleFeature(int which)
         d = !d;
     else
         l = !l;
-    if (!d && !l)
-    {
-        Notice(L"ドックとランチャーのどちらか一方は有効にしてください。", TRUE);
-        return;
-    }
     g_dockOn = d;
     g_lnOn = l;
     if (!g_first)
@@ -1617,6 +2009,18 @@ static void SetSlider(int id, int value, BOOL commit)
     case W_SL_CLOPA:
         Clock_SetOpacity(value);
         break;
+    case W_SL_WSIZE:
+        Weather_SetSize(value);
+        break;
+    case W_SL_WOPA:
+        Weather_SetOpacity(value);
+        break;
+    case W_SL_SMSIZE:
+        SysMon_SetSize(value);
+        break;
+    case W_SL_SMOPA:
+        SysMon_SetOpacity(value);
+        break;
     }
     if (commit && id <= W_SL_OPACITY) /* ドックのスライダーだけ、ドックの設定を保存する */
         Dock_SaveSettings();
@@ -1639,6 +2043,14 @@ static int SliderGet(int id)
         return Clock_GetSize();
     case W_SL_CLOPA:
         return Clock_GetOpacity();
+    case W_SL_WSIZE:
+        return Weather_GetSize();
+    case W_SL_WOPA:
+        return Weather_GetOpacity();
+    case W_SL_SMSIZE:
+        return SysMon_GetSize();
+    case W_SL_SMOPA:
+        return SysMon_GetOpacity();
     default:
         return Dock_GetOpacity();
     }
@@ -1681,6 +2093,35 @@ static void ShowDropdown(HWND hwnd, const Hit *h)
             AppendMenuW(m, MF_STRING | (i == g_sbBrowser ? MF_CHECKED : 0), (UINT_PTR)(i + 1), t);
         }
     }
+    else if (h->id == W_DD_WALLKIND)
+    {
+        n = Wallpaper_KindCount();
+        for (int i = 0; i < n; i++)
+            AppendMenuW(m, MF_STRING | (i == Wallpaper_GetKind() ? MF_CHECKED : 0), (UINT_PTR)(i + 1), Wallpaper_KindName(i));
+    }
+    else if (h->id == W_DD_SMVAR)
+    {
+        n = SysMon_VariantCount();
+        for (int i = 0; i < n; i++)
+            AppendMenuW(m, MF_STRING | (i == SysMon_GetVariant() ? MF_CHECKED : 0), (UINT_PTR)(i + 1), SysMon_VariantName(i));
+    }
+    else if (h->id == W_DD_WVAR)
+    {
+        n = Weather_VariantCount();
+        for (int i = 0; i < n; i++)
+            AppendMenuW(m, MF_STRING | (i == Weather_GetVariant() ? MF_CHECKED : 0), (UINT_PTR)(i + 1), Weather_VariantName(i));
+    }
+    else if (h->id == W_DD_WCITY)
+    {
+        n = Weather_CityCount();
+        for (int i = 0; i < n; i++)
+        {
+            if (i == n - 1)
+                AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+            UINT fl = MF_STRING | (i == Weather_GetCity() ? MF_CHECKED : 0) | ((i > 0 && i < n - 1 && i % 15 == 0) ? MF_MENUBARBREAK : 0);
+            AppendMenuW(m, fl, (UINT_PTR)(i + 1), Weather_CityName(i));
+        }
+    }
     else
     {
         n = SearchBar_EngineCount();
@@ -1705,6 +2146,28 @@ static void ShowDropdown(HWND hwnd, const Hit *h)
     }
     else if (h->id == W_DD_BROWSER)
         g_sbBrowser = i;
+    else if (h->id == W_DD_WALLKIND)
+    {
+        Wallpaper_SetKind(i);
+        if (Wallpaper_KindIsFile(i) && !Wallpaper_HasFile())
+            Wallpaper_PickFile(hwnd);
+        else if (Wallpaper_KindIsVideo(i) && !Wallpaper_HasVideo())
+            Wallpaper_PickVideo(hwnd);
+    }
+    else if (h->id == W_DD_SMVAR)
+        SysMon_SetVariant(i);
+    else if (h->id == W_DD_WVAR)
+        Weather_SetVariant(i);
+    else if (h->id == W_DD_WCITY)
+    {
+        if (i == Weather_CityCount() - 1)
+        {
+            if (Weather_PickCoords(hwnd))
+                Notice(L"指定した緯度・経度の天気を表示します。", FALSE);
+        }
+        else
+            Weather_SetCity(i);
+    }
     else
         g_sbEngine = i;
     Redraw();
@@ -1819,6 +2282,10 @@ static void Activate(HWND hwnd, const Hit *h)
     case W_DD_HOTKEY:
     case W_DD_BROWSER:
     case W_DD_ENGINE:
+    case W_DD_WCITY:
+    case W_DD_WVAR:
+    case W_DD_SMVAR:
+    case W_DD_WALLKIND:
         ShowDropdown(hwnd, h);
         break;
     case W_BTN_RESETPOS:
@@ -1914,6 +2381,94 @@ static void Activate(HWND hwnd, const Hit *h)
     case W_BTN_CLRESET:
         Clock_ResetPosition();
         Notice(L"時計を画面の右上に戻しました。", FALSE);
+        break;
+    case W_TG_SMON:
+        SysMon_SetEnabled(!SysMon_Enabled());
+        Redraw();
+        break;
+    case W_SEG_SMINT:
+        SysMon_SetInterval(h->arg);
+        Redraw();
+        break;
+    case W_TG_SMCPU:
+    case W_TG_SMMEM:
+    case W_TG_SMDISK:
+    case W_TG_SMNET:
+    {
+        int idx = h->id == W_TG_SMCPU ? 0 : (h->id == W_TG_SMMEM ? 1 : (h->id == W_TG_SMDISK ? 2 : 3));
+        if (SysMon_GetItem(idx))
+        {
+            int n = 0;
+            for (int k = 0; k < 4; k++)
+                n += SysMon_GetItem(k) ? 1 : 0;
+            if (n <= 1)
+            {
+                Notice(L"項目は最低1つ表示する必要があります。", TRUE);
+                break;
+            }
+        }
+        SysMon_SetItem(idx, !SysMon_GetItem(idx));
+        Redraw();
+        break;
+    }
+    case W_TG_SMMOVE:
+        SysMon_SetMovable(!SysMon_Movable());
+        Redraw();
+        break;
+    case W_BTN_SMRESET:
+        SysMon_ResetPosition();
+        Notice(L"システムモニタを初期位置に戻しました。", FALSE);
+        break;
+    case W_TG_WEATHER:
+        Weather_SetEnabled(!Weather_Enabled());
+        Redraw();
+        break;
+    case W_TG_WALL:
+        Wallpaper_SetEnabled(!Wallpaper_Enabled());
+        Redraw();
+        break;
+    case W_SEG_WALLFPS:
+        Wallpaper_SetFps(h->arg);
+        Redraw();
+        break;
+    case W_SEG_WALLSPD:
+        Wallpaper_SetSpeed(h->arg);
+        Redraw();
+        break;
+    case W_BTN_WALLFILE:
+        if (Wallpaper_PickFile(hwnd))
+            Notice(L"壁紙に設定しました。", FALSE);
+        Redraw();
+        break;
+    case W_BTN_WALLVIDEO:
+        if (Wallpaper_PickVideo(hwnd))
+            Notice(L"動画を壁紙に設定しました。読み込めない形式のときは元の壁紙のままです。", FALSE);
+        Redraw();
+        break;
+    case W_SEG_WVAR:
+        Weather_SetVariant(h->arg);
+        Redraw();
+        break;
+    case W_SEG_WUNIT:
+        Weather_SetUnit(h->arg);
+        Redraw();
+        break;
+    case W_BTN_WCOORD:
+        if (Weather_PickCoords(hwnd))
+            Notice(L"指定した緯度・経度の天気を表示します。", FALSE);
+        Redraw();
+        break;
+    case W_BTN_WREFRESH:
+        Weather_Refresh();
+        Notice(L"天気を更新しています…", FALSE);
+        break;
+    case W_TG_WMOVE:
+        Weather_SetMovable(!Weather_Movable());
+        Redraw();
+        break;
+    case W_BTN_WRESET:
+        Weather_ResetPosition();
+        Notice(L"天気を画面の左上に戻しました。", FALSE);
         break;
     case W_BTN_OK:
         if (g_first)
@@ -2121,7 +2676,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_focusId = h->id;
             g_focusArg = h->arg;
             SetCapture(hwnd);
-            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_CLOPA)
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_SMOPA)
             {
                 g_dragSlider = TRUE;
                 g_dragId = h->id;
@@ -2207,20 +2762,20 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (!h || !h->en)
                 return 0;
             int d = wp == VK_LEFT ? -1 : 1;
-            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_CLOPA)
+            if (h->id >= W_SL_HIDEMS && h->id <= W_SL_SMOPA)
             {
                 int mn, mx, st;
                 SliderRange(h->id, &mn, &mx, &st);
                 SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
             }
             else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE ||
-                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE || h->id == W_SEG_DKZ || h->id == W_SEG_DKSEL)
+                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE || h->id == W_SEG_DKZ || h->id == W_SEG_DKSEL || h->id == W_SEG_WVAR || h->id == W_SEG_WUNIT || h->id == W_SEG_SMINT)
             {
-                int n = h->id == W_SEG_DKSEL ? Dock_Count() : h->id == W_SEG_DKZ   ? 2
-                                                          : h->id == W_SEG_DKTYPE  ? Dock_TypeCount()
-                                                          : h->id == W_SEG_DKSTYLE ? Dock_StyleCount()
-                                                          : h->id == W_SEG_THEME   ? 3
-                                                                                   : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
+                int n = h->id == W_SEG_DKSEL ? Dock_Count() : h->id == W_SEG_DKZ                           ? 2
+                                                          : h->id == W_SEG_DKTYPE                          ? Dock_TypeCount()
+                                                          : h->id == W_SEG_DKSTYLE                         ? Dock_StyleCount()
+                                                          : (h->id == W_SEG_THEME || h->id == W_SEG_SMINT) ? 3
+                                                                                                           : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE || h->id == W_SEG_WUNIT) ? 2 : (h->id == W_SEG_WVAR ? Weather_VariantCount() : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4)));
                 int a = ClampInt(h->arg + d, 0, n - 1);
                 Hit copy = *h;
                 copy.arg = a;
@@ -2328,6 +2883,8 @@ BOOL Settings_PreTranslate(MSG *m)
 void Settings_RefreshSearchBar(void) { Redraw(); }
 void Settings_RefreshPhotoFrame(void) { Redraw(); }
 void Settings_RefreshClock(void) { Redraw(); }
+void Settings_RefreshWeather(void) { Redraw(); }
+void Settings_RefreshSysMon(void) { Redraw(); }
 
 /* ------------------------------------------------------------------ */
 /* タスクトレイ                                                          */
@@ -2506,11 +3063,13 @@ BOOL Settings_Init(HINSTANCE hInst)
     }
 
     AddTray();
+    Wallpaper_Init(hInst); /* 動く壁紙 (有効なら開始) */
     return TRUE;
 }
 
 void Settings_Shutdown(void)
 {
+    Wallpaper_Shutdown();
     DelTray();
     if (g_set)
         DestroyWindow(g_set);

@@ -1181,7 +1181,8 @@ static BOOL IsDesktopHost(HWND w) { return ClassIs(w, L"Progman") || ClassIs(w, 
 
 static BOOL IsOurs(HWND w)
 {
-    return ClassIs(w, L"PromClockWnd") || ClassIs(w, L"PromPhotoFrameWnd") || ClassIs(w, L"PromSearchBarWnd");
+    return ClassIs(w, L"PromClockWnd") || ClassIs(w, L"PromPhotoFrameWnd") || ClassIs(w, L"PromSearchBarWnd") ||
+           ClassIs(w, L"PromWeatherWnd") || ClassIs(w, L"PromSysMonWnd");
 }
 
 static BOOL AtDesktopLevel(HWND h)

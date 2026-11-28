@@ -74,6 +74,11 @@ void PhotoFrame_Shutdown(void);
 /* clock.c (デスクトップに置ける時計) */
 void Clock_Init(HINSTANCE hInst);
 void Clock_Shutdown(void);
+void SysMon_Init(HINSTANCE hInst);
+void SysMon_Shutdown(void);
+/* weather.c (デスクトップに置ける天気・気温) */
+void Weather_Init(HINSTANCE hInst);
+void Weather_Shutdown(void);
 /* setting.c (アプリ設定: ドック/ランチャーの有効・無効) */
 BOOL Settings_Init(HINSTANCE hInst);
 void Settings_Open(void);
@@ -2177,6 +2182,37 @@ static void DrawLabel(const Item *it, DWORD now)
         }
 }
 
+/* アイコンが0個のときの目印。タイル系デザインはバーを描かないため、これが無いと空のドックが見えなくなる */
+static void DrawEmptyMark(void)
+{
+    if (!IsCircle() && Th()->tiles)
+    { /* 他のデザインはバーが描かれるので、タイル系だけ受け皿を足す */
+        float L, T, R, B;
+        LRect(g_barL, g_barV0, g_barR, g_barV1, &L, &T, &R, &B);
+        float rr = (g_barV1 - g_barV0) * 0.5f;
+        DrawRRect(L, T, R, B, rr < 14.0f * g_dpi ? rr : 14.0f * g_dpi, &g_barStyle);
+    }
+    float cu = g_LW * 0.5f, cv = (g_barV0 + g_barV1) * 0.5f;
+    if (IsCircle())
+    {
+        float u = 0, v = 0; /* 円弧の頂点 (真上) に置く */
+        u = g_cU;
+        v = g_cV + (g_ro0 + g_ro1) * 0.5f;
+        cu = u;
+        cv = v;
+    }
+    float x, y;
+    L2W(cu, cv, &x, &y);
+    float arm = g_base * 0.22f, th2 = fmaxf(1.5f * g_dpi, 1.5f);
+    for (int py = (int)(y - arm - 2); py <= (int)(y + arm + 2); py++)
+        for (int px = (int)(x - arm - 2); px <= (int)(x + arm + 2); px++)
+        {
+            float dx = fabsf(px + 0.5f - x), dy = fabsf(py + 0.5f - y);
+            if ((dx <= th2 * 0.5f && dy <= arm) || (dy <= th2 * 0.5f && dx <= arm))
+                BlendPx(px, py, 255, 255, 255, 0.55f);
+        }
+}
+
 static void Render(void)
 {
     memset(g_bits, 0, (size_t)g_W * g_H * 4);
@@ -2233,6 +2269,9 @@ static void Render(void)
         DrawPanel(g_barL, g_barV0, g_barR, g_barV1, r, th, OpacityMul(), 0.0f, NULL, 3);
         DrawDivider();
     }
+
+    if (g_count == 0)
+        DrawEmptyMark(); /* アイコンが1つも無いドックも消えないよう、受け皿と「+」を必ず描く */
 
     for (int i = 0; i < g_count; i++)
     {
@@ -3489,6 +3528,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
     SearchBar_Init(hInst);
     PhotoFrame_Init(hInst);
     Clock_Init(hInst);
+    SysMon_Init(hInst);
+    Weather_Init(hInst);
     LoadConfig(); /* ドックの数・設定・アイコン一覧を読む */
     for (int di = 0; di < g_nDocks; di++)
     {
@@ -3518,6 +3559,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow)
             FreeItem(&g_docks[di]->items[i]);
     free(g_lblMask);
     DestroyGhost();
+    Weather_Shutdown();
+    SysMon_Shutdown();
     Clock_Shutdown();
     PhotoFrame_Shutdown();
     SearchBar_Shutdown();

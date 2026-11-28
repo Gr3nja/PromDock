@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  PromDock build script (MSVC)
-rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c + photoframe.c + clock.c を1つのexeに)
+rem    build.bat        : build  -> build\PromDock.exe (promdock.c + launcher.c + setting.c + searchbar.c + photoframe.c + clock.c + weather.c + wallpaper.c + sysmon.c を1つのexeに)
 rem    build.bat run    : build and launch
 rem
 rem  Works in any of these situations:
@@ -44,6 +44,21 @@ if not exist "photoframe.c" (
 )
 if not exist "clock.c" (
     echo [ERROR] clock.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "weather.c" (
+    echo [ERROR] weather.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "wallpaper.c" (
+    echo [ERROR] wallpaper.c not found next to build.bat.
+    set "RC=1"
+    goto :done
+)
+if not exist "sysmon.c" (
+    echo [ERROR] sysmon.c not found next to build.bat.
     set "RC=1"
     goto :done
 )
@@ -101,7 +116,7 @@ if exist "promdock.ico" if exist "promdock.rc" (
 )
 
 echo Building PromDock ...
-cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c photoframe.c clock.c %RES% /link /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /W3 /utf-8 /Fobuild\ /Febuild\PromDock.exe "%SRC%" launcher.c setting.c searchbar.c photoframe.c clock.c weather.c wallpaper.c sysmon.c %RES% /link /SUBSYSTEM:WINDOWS
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed.

@@ -90,6 +90,8 @@ int Dock_GetStyle(void);
 void Dock_SetStyle(int s);
 int Dock_StyleCount(void);
 const wchar_t *Dock_StyleName(int i);
+int Dock_GetZOrder(void);
+void Dock_SetZOrder(int z);
 int Dock_GetType(void);
 void Dock_SetType(int t);
 int Dock_TypeCount(void);
@@ -195,6 +197,7 @@ enum
     W_SEG_LNEDGE,
     W_SEG_DKSTYLE, /* ドック: デザイン */
     W_SEG_DKTYPE,  /* ドック: 形 (バー / サークル) */
+    W_SEG_DKZ,     /* ドック: 重なり順 (最前列 / 最奥) */
     W_SL_HIDEMS,
     W_SL_ICON,
     W_SL_ZOOM,
@@ -989,9 +992,10 @@ static void PageDock(void)
 {
     BOOL on = g_dockOn;
     Section(L"表示");
-    CardBegin(RH * 3);
+    CardBegin(RH * 4);
     {
         static const wchar_t *const pos[] = {L"下", L"上", L"左", L"右"};
+        static const wchar_t *const zo[] = {L"最前列", L"最奥"};
         RowText(0, RH, L"ドックを有効にする", L"オフにすると、ドックを非表示にします", 60, TRUE);
         Toggle(W_TG_DOCK, RightX(44), RowTop(0, RH) + (RH - 24) / 2, g_dockOn, TRUE);
 
@@ -1000,6 +1004,9 @@ static void PageDock(void)
 
         RowText(2, RH, L"端に沿った位置", L"中央に戻します。Ctrl + ドラッグで自由に動かせます", 110, on);
         Button(W_BTN_RESETPOS, 0, RightX(100), RowTop(2, RH) + (RH - 34) / 2, 100, 34, L"中央に戻す", 0, on);
+
+        RowText(3, RH, L"重なり順", L"最前列: 常に他のウィンドウの手前 / 最奥: デスクトップの上・他のウィンドウの背面", 200, on);
+        Segmented(W_SEG_DKZ, RightX(180), RowTop(3, RH) + (RH - 34) / 2, 180, zo, 2, Dock_GetZOrder(), on);
     }
     CardEnd();
 
@@ -1028,7 +1035,7 @@ static void PageDock(void)
             tc = 4;
         for (int i = 0; i < tc; i++)
             tn[i] = Dock_TypeName(i);
-        RowText(0, RH, L"ドックの形", L"バー: 従来の横長のドック / サークル: 画面の端を中心に半円状に並べます", 250, on);
+        RowText(0, RH, L"ドックの形", L"バー: 横長 / 半円: 端を中心に円弧状 / 全円: 端に接する円環状", 250, on);
         Segmented(W_SEG_DKTYPE, RightX(240), RowTop(0, RH) + (RH - 34) / 2, 240, tn, tc, Dock_GetType(), on);
 
         const wchar_t *dn[8];
@@ -1722,6 +1729,11 @@ static void Activate(HWND hwnd, const Hit *h)
         Dock_SaveSettings();
         Redraw();
         break;
+    case W_SEG_DKZ:
+        Dock_SetZOrder(h->arg);
+        Dock_SaveSettings();
+        Redraw();
+        break;
     case W_SEG_DKTYPE:
         Dock_SetType(h->arg);
         Dock_SaveSettings();
@@ -2156,10 +2168,12 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SetSlider(h->id, SliderGet(h->id) + d * st, TRUE);
             }
             else if (h->id == W_SEG_THEME || h->id == W_SEG_EDGE || h->id == W_SEG_LNSTYLE || h->id == W_SEG_LNEDGE ||
-                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE)
+                     h->id == W_SEG_CLSTYLE || h->id == W_SEG_CLVAR || h->id == W_SEG_DKSTYLE || h->id == W_SEG_DKTYPE || h->id == W_SEG_DKZ)
             {
-                int n = h->id == W_SEG_DKTYPE ? Dock_TypeCount() : h->id == W_SEG_DKSTYLE ? Dock_StyleCount() : h->id == W_SEG_THEME ? 3
-                                                                                          : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
+                int n = h->id == W_SEG_DKZ ? 2 : h->id == W_SEG_DKTYPE ? Dock_TypeCount()
+                                             : h->id == W_SEG_DKSTYLE  ? Dock_StyleCount()
+                                             : h->id == W_SEG_THEME    ? 3
+                                                                       : ((h->id == W_SEG_LNSTYLE || h->id == W_SEG_CLSTYLE) ? 2 : (h->id == W_SEG_CLVAR ? Clock_VariantCount(Clock_GetStyle()) : 4));
                 int a = ClampInt(h->arg + d, 0, n - 1);
                 Hit copy = *h;
                 copy.arg = a;

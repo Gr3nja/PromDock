@@ -18,13 +18,19 @@
  *       Shift+クリック or 中クリック: 新しく起動
  *   - 右クリック: ウィンドウを閉じる / 新しく起動 / 固定・削除 / 設定 / 終了
  *       設定: 向き(横/縦) / 位置(下・上・左・右) / 自動的に隠す / 隠れるまでの時間
- *   - Ctrl+ドラッグでドックを自由に移動 (一番近い画面の端に吸着)
+ *   - Ctrl+ドラッグでドックを画面上の好きな場所へ制限なく移動 (端への吸着なし。自由配置中は「自動的に隠す」は無効)
+
+ *       右クリック > 設定 > 位置 (下・上・左・右 / 中央に戻す) で再び端に固定
+
+ *   - 重なり順: 最前列 (常に他のウィンドウの手前) / 最奥 (デスクトップの上・他のウィンドウの背面)。右クリック > 設定 > 重なり順 で切り替え
+
+ *   - 全円ドック: マウスホイール または Shift+ドラッグ でアイコンを回転
  *   - 設定は exe と同じフォルダの promdock.txt (UTF-8) に保存
  *       @autohide @edge @frac @hidems のほか、アプリ設定(setting.c)から変更できる
  *       @iconsize=48 (アイコンサイズ px) / @zoom=150 (ホバー時の拡大率 %) / @opacity=78 (背景の濃さ %)
  *       @style=0 (デザイン 0:標準 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ 6:オニキス 7:ノワール)
  *       デザインは右クリック > 設定 > デザイン、またはアプリ設定(ドック > 外観)から切り替えられる
- *       @docktype=0 (ドックの形 0:バー 1:サークル。サークルは画面の端を中心にした半円状に並び、デザインもそのまま使える)
+ *       @docktype=0 (ドックの形 0:バー 1:半円 2:全円。半円は画面の端を中心にした円弧状、全円は画面の端に接する完全な円環状に並び、デザインもそのまま使える)
  *       ドックの形は右クリック > 設定 > ドックの形、またはアプリ設定(ドック > 外観)から切り替えられる
  *   - F11 でフルスクリーンのランチャーを開く (launcher.c / 同じexeにビルド)
  *   - デスクトップに置ける検索バー (searchbar.c / 同じexeにビルド。ブラウザと検索エンジンを選んで追加)
@@ -202,12 +208,14 @@ static const Theme g_themes[N_STYLES] = {
 static int g_style = 0; /* 0:クラシック 1:macOS 2:ガラス 3:モダン 4:ネオン 5:オーロラ */
 static const Theme *Th(void) { return &g_themes[g_style]; }
 
-/* ドックの形: 0=バー(従来) / 1=サークル (画面の端を中心にした半円状に並ぶ。デザインはバーと共通) */
-#define N_DOCKTYPES 2
-static const wchar_t *const g_dockTypeNames[N_DOCKTYPES] = {L"バー", L"サークル"};
+/* ドックの形: 0=バー(従来) / 1=半円 (画面の端を中心にした円弧状に並ぶ) / 2=全円 (画面の端に接する完全な円環状に並ぶ)。デザインはバーと共通 */
+#define N_DOCKTYPES 3
+static const wchar_t *const g_dockTypeNames[N_DOCKTYPES] = {L"バー", L"半円", L"全円"};
 static int g_dockType = 0;
-static BOOL IsCircle(void) { return g_dockType == 1; }
+static BOOL IsCircle(void) { return g_dockType >= 1; } /* 極座標配置 (半円・全円共通) */
+static BOOL IsRing(void) { return g_dockType == 2; }   /* 全円 (円環) */
 #define HALF_PI 1.5707963f
+#define PI_F 3.14159265f
 /* 「背景の濃さ」設定 (既定 0.78 = 等倍) をテーマの塗りの不透明度に掛ける */
 static float OpacityMul(void) { return g_barStyle.fa / 0.78f; }
 
@@ -221,17 +229,26 @@ static HBITMAP g_dib, g_oldBmp;
 static uint32_t *g_bits;
 static int g_W, g_H, g_posX, g_posY0;
 static float g_hideDelta, g_slide = 0.0f;
-static int g_LW, g_LH;      /* 論理寸法: 軸方向の長さ / 画面端からの厚み */
-static int g_edge = 0;      /* 0:下 1:上 2:左 3:右 */
-static float g_frac = 0.5f; /* 端に沿った位置 (0..1, ドック中心) */
-static int g_hideMs = 600;  /* 自動的に隠すまでの時間(ms) */
-static BOOL g_moving;       /* Ctrl+ドラッグで移動中 */
+static int g_LW, g_LH;                         /* 論理寸法: 軸方向の長さ / 画面端からの厚み */
+static int g_edge = 0;                         /* 0:下 1:上 2:左 3:右 */
+static float g_frac = 0.5f;                    /* 端に沿った位置 (0..1, ドック中心) */
+static int g_hideMs = 600;                     /* 自動的に隠すまでの時間(ms) */
+static BOOL g_moving;                          /* Ctrl+ドラッグで移動中 */
+static BOOL g_zBottom = FALSE;                 /* 重なり順: FALSE=最前列 / TRUE=最奥 (デスクトップの上、他のウィンドウの背面) */
+static BOOL g_free = FALSE;                    /* 自由配置 (Ctrl+ドラッグで置いた位置。端に固定しない) */
+static float g_fx = 0.5f, g_fy = 0.5f;         /* 自由配置: ウィンドウ中心の位置 (作業領域に対する割合) */
+static POINT g_moveStart;                      /* Ctrl+ドラッグ開始時のカーソル位置 (画面座標) */
+static int g_moveWX, g_moveWY;                 /* Ctrl+ドラッグ開始時のウィンドウ位置 */
+static float g_rot = 0.0f, g_rotTarget = 0.0f; /* 全円: アイコン全体の回転角 (rad, 時計回りが正) 現在値/目標値 */
+static BOOL g_rotating;                        /* Shift+ドラッグで回転中 */
+static float g_rotLast;                        /* 回転ドラッグ中の直前のカーソル角度 */
 static float g_dpi = 1.0f;
 static float g_base, g_gap, g_padx, g_pady, g_margin, g_bounce;
 static float g_baseline, g_barV0, g_barV1, g_barL, g_barR, g_hoverV; /* v: 画面端からの距離 (サークル時の g_barV0/V1/baseline/hoverV は中心からの半径) */
 static float g_cU, g_cV, g_Rref, g_ro0, g_ro1;                       /* サークル: 中心(論理座標) / 基準半径 / 帯の内径・外径 */
 static BOOL g_hover, g_tracking, g_animOn, g_menuOpen, g_dragged;
 static BOOL g_autohide = FALSE;
+static BOOL AutoHideOn(void) { return g_autohide && !g_free; } /* 自由配置中は端へ隠せないので無効 */
 
 /* ドラッグ&ドロップ状態 */
 static int g_dragOut = -1;          /* ドックの外へ引き出し中の項目 (-1: なし) */
@@ -357,13 +374,32 @@ static void PolarW(float rho, float phi, float *x, float *y, float *tx, float *t
     }
 }
 /* 項目を並べる軸 (バー: u / サークル: 円弧の長さ) 上でのマウス位置。項目の cx と同じ座標系 */
+/* 中心から見た (dx,dy) の方向を、真上を0・時計回りを正とした角度で返す。
+ * 半円: 下半分は左右の端に丸める / 全円: -π..π に折り返す (真下が継ぎ目) */
+static float ArcAngle(float dx, float dy)
+{
+    if (IsRing())
+    {
+        float a = HALF_PI - atan2f(dy, dx);
+        return a > PI_F ? a - 2.0f * PI_F : a;
+    }
+    float phi = dy >= 0.0f ? atan2f(dy, dx) : (dx < 0.0f ? PI_F : 0.0f);
+    return HALF_PI - phi;
+}
+static float WrapPi(float a)
+{
+    while (a > PI_F)
+        a -= 2.0f * PI_F;
+    while (a <= -PI_F)
+        a += 2.0f * PI_F;
+    return a;
+}
+static float RotOf(void) { return IsRing() ? g_rot : 0.0f; } /* 全円だけ回転できる */
 static float MouseAlong(void)
 {
     if (!IsCircle())
         return g_mouseU;
-    float dx = g_mouseU - g_cU, dy = g_mouseV - g_cV;
-    float phi = dy >= 0.0f ? atan2f(dy, dx) : (dx < 0.0f ? 3.14159265f : 0.0f);
-    return g_LW * 0.5f + (HALF_PI - phi) * g_Rref;
+    return g_LW * 0.5f + WrapPi(ArcAngle(g_mouseU - g_cU, g_mouseV - g_cV) - RotOf()) * g_Rref;
 }
 /* ドックの外へ引き出し中か (離すと削除) */
 static BOOL OutsideDock(void)
@@ -802,6 +838,8 @@ static void SaveConfig(void)
     fprintf(f, "@autohide=%d\r\n@edge=%d\r\n@frac=%d\r\n@hidems=%d\r\n", g_autohide ? 1 : 0, g_edge, (int)(g_frac * 1000.0f + 0.5f), g_hideMs);
     fprintf(f, "@iconsize=%d\r\n@zoom=%d\r\n@opacity=%d\r\n", (int)(g_baseSize + 0.5f), (int)(g_maxScale * 100.0f + 0.5f), (int)(g_barStyle.fa * 100.0f + 0.5f));
     fprintf(f, "@style=%d\r\n@docktype=%d\r\n", g_style, g_dockType);
+    fprintf(f, "@zorder=%d\r\n", g_zBottom ? 1 : 0);
+    fprintf(f, "@free=%d\r\n@fx=%d\r\n@fy=%d\r\n", g_free ? 1 : 0, (int)floorf(g_fx * 1000.0f + 0.5f), (int)floorf(g_fy * 1000.0f + 0.5f));
     for (int i = 0; i < g_count; i++)
     {
         if (!g_items[i].pinned)
@@ -851,6 +889,14 @@ static void LoadConfig(void)
                 g_edge = ClampI(atoi(p + 6), 0, 3);
             else if (strncmp(p, "@frac=", 6) == 0)
                 g_frac = ClampI(atoi(p + 6), 0, 1000) / 1000.0f;
+            else if (strncmp(p, "@zorder=", 8) == 0)
+                g_zBottom = atoi(p + 8) != 0;
+            else if (strncmp(p, "@free=", 6) == 0)
+                g_free = atoi(p + 6) != 0;
+            else if (strncmp(p, "@fx=", 4) == 0)
+                g_fx = ClampI(atoi(p + 4), -500, 1500) / 1000.0f;
+            else if (strncmp(p, "@fy=", 4) == 0)
+                g_fy = ClampI(atoi(p + 4), -500, 1500) / 1000.0f;
             else if (strncmp(p, "@hidems=", 8) == 0)
                 g_hideMs = ClampI(atoi(p + 8), 0, 60000);
             else if (strncmp(p, "@iconsize=", 10) == 0)
@@ -1022,6 +1068,40 @@ static void ActivateItem(Item *it)
 /* ------------------------------------------------------------------ */
 /* ウィンドウ寸法・DIB                                                  */
 /* ------------------------------------------------------------------ */
+/* デスクトップ (アイコンを載せているシェルのウィンドウ) */
+static HWND FindDesktopHost(void)
+{
+    HWND pm = FindWindowW(L"Progman", NULL);
+    if (pm && FindWindowExW(pm, NULL, L"SHELLDLL_DefView", NULL))
+        return pm;
+    HWND w = NULL;
+    while ((w = FindWindowExW(NULL, w, L"WorkerW", NULL)) != NULL)
+        if (FindWindowExW(w, NULL, L"SHELLDLL_DefView", NULL))
+            return w;
+    return pm;
+}
+
+/* 重なり順を反映する。最前列: TOPMOST / 最奥: デスクトップのすぐ上 (他のウィンドウは全部手前になる)。
+ * HWND_BOTTOM だとデスクトップの裏に回って見えなくなることがあるため、デスクトップの直前に差し込む */
+static void ApplyZOrder(int x, int y, int w, int h, UINT flags)
+{
+    if (!g_zBottom)
+    {
+        SetWindowPos(g_hwnd, HWND_TOPMOST, x, y, w, h, flags | SWP_NOACTIVATE);
+        return;
+    }
+    HWND host = FindDesktopHost();
+    HWND prev = host ? GetWindow(host, GW_HWNDPREV) : NULL;
+    if (prev == g_hwnd)
+    { /* すでにデスクトップの直上 */
+        SetWindowPos(g_hwnd, HWND_NOTOPMOST, x, y, w, h, flags | SWP_NOACTIVATE | SWP_NOZORDER);
+        if (GetWindowLongW(g_hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
+            SetWindowPos(g_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        return;
+    }
+    SetWindowPos(g_hwnd, prev ? prev : HWND_BOTTOM, x, y, w, h, flags | SWP_NOACTIVATE);
+}
+
 static void ResizeDock(void)
 {
     float d = g_dpi;
@@ -1043,9 +1123,9 @@ static void ResizeDock(void)
 
     if (IsCircle())
     {
-        /* サークル: 画面の端に中心を置いた半円状の帯。個数が増えるほど半径が大きくなる。
+        /* サークル: 画面の端に中心を置いた半円状の帯 (全円は端に接する円環)。個数が増えるほど半径が大きくなる。
          * 軸方向 g_LW = 円の直径 + 余白 / 端からの厚み g_LH = 中心の高さ + 半径 + 余白 */
-        const float maxSpan = 2.3f; /* 帯が占める最大の角度 (約132度) */
+        const float maxSpan = IsRing() ? 2.0f * PI_F : 2.3f; /* 帯が占める最大の角度 (半円: 約132度 / 全円: 360度) */
         g_base = g_baseSize * d;
         for (;;)
         { /* 画面に収まるまでアイコンを縮める */
@@ -1058,7 +1138,8 @@ static void ResizeDock(void)
             g_ro0 = g_Rref - g_base * 0.5f - g_pady;
             g_ro1 = g_ro0 + g_base + 2 * g_pady;
             float roMax = g_ro0 + g_pady + g_maxScale * g_base + g_bounce;
-            g_cV = g_margin + g_pady + g_base * 0.5f;
+            /* 半円: 中心は端の少し内側 / 全円: 帯の下端が端から余白だけ離れて接するよう、中心を半径ぶん持ち上げる */
+            g_cV = IsRing() ? g_margin + g_ro1 : g_margin + g_pady + g_base * 0.5f;
             g_LW = (int)(2 * (roMax + g_margin));
             g_LH = (int)(g_cV + roMax + g_margin + 4);
             if ((g_LW <= limit && g_LH <= perp * 0.92f) || g_base <= 20 * d)
@@ -1103,25 +1184,35 @@ static void ResizeDock(void)
     float start = (float)(vert ? wa.top : wa.left);
     int along = (int)(start + g_frac * len - g_LW * 0.5f);
     along = ClampI(along, (int)start, (int)(start + len) - g_LW);
-    switch (g_edge)
-    {
-    case 0:
-        g_posX = along;
-        g_posY0 = wa.bottom - g_H;
-        break;
-    case 1:
-        g_posX = along;
-        g_posY0 = wa.top;
-        break;
-    case 2:
-        g_posX = wa.left;
-        g_posY0 = along;
-        break;
-    default:
-        g_posX = wa.right - g_W;
-        g_posY0 = along;
-        break;
+    if (g_free)
+    { /* 自由配置: 制限なし (見失わないよう、一部だけは作業領域内に残す) */
+        float fw = (float)(wa.right - wa.left), fh = (float)(wa.bottom - wa.top);
+        int keep = (int)(48 * d);
+        g_posX = (int)(wa.left + g_fx * fw - g_W * 0.5f);
+        g_posY0 = (int)(wa.top + g_fy * fh - g_H * 0.5f);
+        g_posX = ClampI(g_posX, wa.left - g_W + keep, wa.right - keep);
+        g_posY0 = ClampI(g_posY0, wa.top - g_H + keep, wa.bottom - keep);
     }
+    else
+        switch (g_edge)
+        {
+        case 0:
+            g_posX = along;
+            g_posY0 = wa.bottom - g_H;
+            break;
+        case 1:
+            g_posX = along;
+            g_posY0 = wa.top;
+            break;
+        case 2:
+            g_posX = wa.left;
+            g_posY0 = along;
+            break;
+        default:
+            g_posX = wa.right - g_W;
+            g_posY0 = along;
+            break;
+        }
 
     if (g_memdc)
     {
@@ -1145,7 +1236,7 @@ static void ResizeDock(void)
     bi.bmiHeader.biCompression = BI_RGB;
     g_dib = CreateDIBSection(g_memdc, &bi, DIB_RGB_COLORS, (void **)&g_bits, NULL, 0);
     g_oldBmp = (HBITMAP)SelectObject(g_memdc, g_dib);
-    SetWindowPos(g_hwnd, HWND_TOPMOST, g_posX, g_posY0, g_W, g_H, SWP_NOACTIVATE);
+    ApplyZOrder(g_posX, g_posY0, g_W, g_H, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1189,7 +1280,7 @@ static void Layout(void)
         g_items[i].sz = sz[i];
         g_items[i].cx = x + cx[i];
         if (IsCircle()) /* cx は弧の長さ (中心 = g_LW/2)。基準半径での弧長から角度を求める */
-            g_items[i].ang = HALF_PI - (g_items[i].cx - g_LW * 0.5f) / g_Rref;
+            g_items[i].ang = HALF_PI - (g_items[i].cx - g_LW * 0.5f) / g_Rref - RotOf();
     }
 }
 
@@ -1227,6 +1318,21 @@ static BOOL Step(void)
             busy = TRUE;
     }
 
+    /* 全円の回転 (ホイール: 目標角へなめらかに追従) */
+    if (IsRing())
+    {
+        float rd = g_rotTarget - g_rot;
+        if (fabsf(rd) < 0.0005f)
+        {
+            g_rot = g_rotTarget = WrapPi(g_rotTarget);
+        }
+        else
+        {
+            g_rot += rd * 0.3f;
+            busy = TRUE;
+        }
+    }
+
     /* ドロップ位置の隙間 */
     float openT = (g_dropActive && g_dropOk) ? 1.0f : 0.0f;
     float od = openT - g_dropOpen;
@@ -1240,7 +1346,7 @@ static BOOL Step(void)
 
     /* 自動的に隠す */
     float slideTarget = 0.0f;
-    if (g_autohide && !g_hover && !g_menuOpen && g_dragOut < 0 && now - g_leaveTick > (DWORD)g_hideMs)
+    if (AutoHideOn() && !g_hover && !g_menuOpen && g_dragOut < 0 && now - g_leaveTick > (DWORD)g_hideMs)
         slideTarget = 1.0f;
     float sd = slideTarget - g_slide;
     if (fabsf(sd) < 0.003f)
@@ -1250,7 +1356,7 @@ static BOOL Step(void)
         g_slide += sd * 0.25f;
         busy = TRUE;
     }
-    if (g_autohide && !g_hover && g_slide < 1.0f)
+    if (AutoHideOn() && !g_hover && g_slide < 1.0f)
         busy = TRUE; /* 隠れるまで待機 */
 
     return busy || g_hover;
@@ -1262,9 +1368,9 @@ static int HitTest(float u, float v)
     { /* 帯の外周より内側で、マウスの角度にある項目 */
         float dx = u - g_cU, dy = v - g_cV;
         float rho = sqrtf(dx * dx + dy * dy);
-        if (dy < 0.0f || rho > g_hoverV || rho < g_ro0 - 6.0f * g_dpi)
+        if ((dy < 0.0f && !IsRing()) || rho > g_hoverV || rho < g_ro0 - 6.0f * g_dpi)
             return -1;
-        float a = g_LW * 0.5f + (HALF_PI - atan2f(dy, dx)) * g_Rref;
+        float a = g_LW * 0.5f + WrapPi(ArcAngle(dx, dy) - RotOf()) * g_Rref;
         for (int i = 0; i < g_count; i++)
         {
             float l = g_items[i].cx - g_items[i].sz * 0.5f - g_gap * 0.5f;
@@ -1520,7 +1626,8 @@ static void DrawArcPanel(float s0, float s1, float ro0, float ro1, float rad, co
     float fa0 = fminf(t->f0.a * aMul, 1.0f), fa1 = fminf(t->f1.a * aMul, 1.0f);
 
     float L, T, R, B;
-    LRect(g_cU - rout, g_cV - ext - hh, g_cU + rout, g_cV + rout, &L, &T, &R, &B);
+    BOOL ring = IsRing();
+    LRect(g_cU - rout, ring ? g_cV - rout : g_cV - ext - hh, g_cU + rout, g_cV + rout, &L, &T, &R, &B);
     int x0 = ClampI((int)L, 0, g_W), x1 = ClampI((int)R + 1, 0, g_W);
     int y0 = ClampI((int)T, 0, g_H), y1 = ClampI((int)B + 1, 0, g_H);
 
@@ -1534,10 +1641,19 @@ static void DrawArcPanel(float s0, float s1, float ro0, float ro1, float rad, co
             if (r2 < rin2 || r2 > rout2)
                 continue;
             float rho = sqrtf(r2);
-            float s = (HALF_PI - atan2f(dy, dx)) * g_Rref;
-            float qx = fabsf(s - sc) - hs + rad, qy = fabsf(rho - rc) - hh + rad;
-            float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f);
-            float dist = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0.0f) - rad; /* 曲げた角丸矩形SDF */
+            float s, dist;
+            if (ring)
+            { /* 全円: 端のない完全な円環 (半径方向の距離だけで決まる) */
+                s = 0.0f;
+                dist = fabsf(rho - rc) - hh;
+            }
+            else
+            {
+                s = (HALF_PI - atan2f(dy, dx)) * g_Rref;
+                float qx = fabsf(s - sc) - hs + rad, qy = fabsf(rho - rc) - hh + rad;
+                float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f);
+                dist = sqrtf(ox * ox + oy * oy) + fminf(fmaxf(qx, qy), 0.0f) - rad; /* 曲げた角丸矩形SDF */
+            }
             if (dist > blur + 1.0f)
                 continue;
 
@@ -1555,7 +1671,9 @@ static void DrawArcPanel(float s0, float s1, float ro0, float ro1, float rad, co
                 float outer = Clamp01(0.5f - dist);
                 if (outer > 0.0f)
                 {
-                    float tv = Clamp01((rho - ro0) / lt), tu = Clamp01((s - s0) / ls);
+                    float tv = Clamp01((rho - ro0) / lt);
+                    float tu = ring ? 0.5f + 0.5f * dx / fmaxf(rho, 1.0f) /* 全円: 継ぎ目が出ないよう左右方向のグラデーション */
+                                    : Clamp01((s - s0) / ls);
                     float g = t->alongU ? tu : tv; /* tv: 内側(端側)0 -> 外側1 */
 
                     float fr = Lerpf(t->f0.r, t->f1.r, g);
@@ -1758,7 +1876,7 @@ static void DrawDivider(void)
     { /* 弧の途中に、半径方向の細い線 */
         float s = ((a->cx + a->sz * 0.5f) + (b->cx - b->sz * 0.5f)) * 0.5f - g_LW * 0.5f;
         float px, py, tx, ty;
-        PolarW(g_baseline + g_base * 0.5f, HALF_PI - s / g_Rref, &px, &py, &tx, &ty);
+        PolarW(g_baseline + g_base * 0.5f, HALF_PI - s / g_Rref - RotOf(), &px, &py, &tx, &ty);
         Col dc = {255.0f, 255.0f, 255.0f, t->divider};
         DrawCapsule(px, py, g_base * 0.76f, ceilf(g_dpi), -ty, tx, &dc); /* 接線に直交 = 半径方向 */
         return;
@@ -1847,7 +1965,7 @@ static void DrawLabel(const Item *it, DWORD now)
     if (IsCircle())
     { /* サークル: 円の内側の空きに表示 */
         float xc, yc;
-        L2W(g_cU, g_cV + g_ro0 * 0.45f, &xc, &yc);
+        L2W(g_cU, g_cV + (IsRing() ? 0.0f : g_ro0 * 0.45f), &xc, &yc); /* 全円は円の中心 */
         L = xc - pw * 0.5f;
         T = yc - ph * 0.5f;
         L = fminf(fmaxf(L, 2.0f), fmaxf(g_W - pw - 2.0f, 2.0f));
@@ -1913,7 +2031,7 @@ static void Render(void)
                 float u, v;
                 W2L(x + 0.5f, y + 0.5f, &u, &v);
                 float dx = u - g_cU, dy = v - g_cV, r2 = dx * dx + dy * dy;
-                if (dy >= 0.0f && r2 >= lr2 && r2 <= hr2)
+                if ((dy >= 0.0f || IsRing()) && r2 >= lr2 && r2 <= hr2)
                     g_bits[y * g_W + x] = 0x01000000u;
             }
     }
@@ -2105,7 +2223,9 @@ static void ShowContextMenu(HWND hwnd, int hit)
 
     /* 設定 */
     BOOL vert = IsVert();
-    HMENU set = CreatePopupMenu(), mo = CreatePopupMenu(), mp = CreatePopupMenu(), mt = CreatePopupMenu();
+    HMENU set = CreatePopupMenu(), mo = CreatePopupMenu(), mp = CreatePopupMenu(), mt = CreatePopupMenu(), mz = CreatePopupMenu();
+    AppendMenuW(mz, MF_STRING | (!g_zBottom ? MF_CHECKED : 0), 60, L"最前列 (常に手前)");
+    AppendMenuW(mz, MF_STRING | (g_zBottom ? MF_CHECKED : 0), 61, L"最奥 (デスクトップの上・他のウィンドウの背面)");
     AppendMenuW(mo, MF_STRING | (!vert ? MF_CHECKED : 0), 10, L"横");
     AppendMenuW(mo, MF_STRING | (vert ? MF_CHECKED : 0), 11, L"縦");
     AppendMenuW(mp, MF_STRING | (g_edge == 0 ? MF_CHECKED : 0) | (vert ? MF_GRAYED : 0), 12, L"下");
@@ -2132,6 +2252,7 @@ static void ShowContextMenu(HWND hwnd, int hit)
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mo, L"向き");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mp, L"位置");
+    AppendMenuW(set, MF_POPUP, (UINT_PTR)mz, L"重なり順");
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_STRING | (g_autohide ? MF_CHECKED : 0), 6, L"自動的に隠す");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)mt, L"隠れるまでの時間");
@@ -2165,6 +2286,8 @@ static void ShowContextMenu(HWND hwnd, int hit)
     PostMessage(hwnd, WM_NULL, 0, 0);
     g_menuOpen = FALSE;
     g_leaveTick = GetTickCount();
+    if (g_zBottom) /* メニュー表示で前面に出たので、最奥へ戻す */
+        ApplyZOrder(0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
     switch (cmd)
     {
@@ -2198,6 +2321,11 @@ static void ShowContextMenu(HWND hwnd, int hit)
     case 31:
         Settings_OpenPage(1);
         break;
+    case 60:
+    case 61:
+        g_zBottom = (cmd == 61);
+        ApplyLayoutChange();
+        break;
     case 6:
         g_autohide = !g_autohide;
         SaveConfig();
@@ -2206,6 +2334,7 @@ static void ShowContextMenu(HWND hwnd, int hit)
         if (g_edge >= 2)
         {
             g_edge = 0;
+            g_free = FALSE;
             ApplyLayoutChange();
         }
         break;
@@ -2213,6 +2342,7 @@ static void ShowContextMenu(HWND hwnd, int hit)
         if (g_edge < 2)
         {
             g_edge = 3;
+            g_free = FALSE;
             ApplyLayoutChange();
         }
         break;
@@ -2221,10 +2351,12 @@ static void ShowContextMenu(HWND hwnd, int hit)
     case 14:
     case 15:
         g_edge = cmd - 12;
+        g_free = FALSE; /* 端に固定し直す */
         ApplyLayoutChange();
         break;
     case 16:
         g_frac = 0.5f;
+        g_free = FALSE;
         ApplyLayoutChange();
         break;
     default:
@@ -2498,42 +2630,28 @@ static IDropTargetVtbl g_dtVtbl = {
     DT_DragEnter, DT_DragOver, DT_DragLeave, DT_Drop};
 static IDropTarget g_dropTarget = {&g_dtVtbl};
 
-/* Ctrl+ドラッグ: カーソルに一番近い画面の端へ吸着して移動 */
+/* Ctrl+ドラッグ: 掴んだ位置を保ったまま、画面上の好きな場所へ制限なく移動 (端への吸着なし) */
 static void MoveDockToCursor(void)
 {
     POINT pt;
     GetCursorPos(&pt);
     RECT wa;
     SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
-    float dB = (float)(wa.bottom - pt.y), dT = (float)(pt.y - wa.top);
-    float dL = (float)(pt.x - wa.left), dR = (float)(wa.right - pt.x);
-    int e = 0;
-    float best = dB;
-    if (dT < best)
+    float fw = fmaxf((float)(wa.right - wa.left), 1.0f), fh = fmaxf((float)(wa.bottom - wa.top), 1.0f);
+    int wx = g_moveWX + (pt.x - g_moveStart.x), wy = g_moveWY + (pt.y - g_moveStart.y);
+    float fx = ((float)wx + g_W * 0.5f - wa.left) / fw;
+    float fy = ((float)wy + g_H * 0.5f - wa.top) / fh;
+    if (!g_free || fabsf(fx - g_fx) > 0.0002f || fabsf(fy - g_fy) > 0.0002f)
     {
-        best = dT;
-        e = 1;
-    }
-    if (dL < best)
-    {
-        best = dL;
-        e = 2;
-    }
-    if (dR < best)
-    {
-        best = dR;
-        e = 3;
-    }
-    float frac = (e >= 2) ? (float)(pt.y - wa.top) / (float)(wa.bottom - wa.top)
-                          : (float)(pt.x - wa.left) / (float)(wa.right - wa.left);
-    frac = Clamp01(frac);
-    if (e != g_edge || fabsf(frac - g_frac) > 0.0005f)
-    {
-        g_edge = e;
-        g_frac = frac;
+        g_free = TRUE;
+        g_fx = fx;
+        g_fy = fy;
         g_slide = 0.0f;
         ResizeDock();
         Render();
+        /* 作業領域の外へ出過ぎて ResizeDock が位置を丸めた場合は、丸めた位置を保存値にする */
+        g_fx = ((float)g_posX + g_W * 0.5f - wa.left) / fw;
+        g_fy = ((float)g_posY0 + g_H * 0.5f - wa.top) / fh;
     }
 }
 
@@ -2557,6 +2675,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_moving)
         {
             MoveDockToCursor();
+            return 0;
+        }
+        if (g_rotating)
+        { /* Shift+ドラッグ: カーソルが円の中心まわりに動いた角度だけ回す */
+            W2L((float)(short)LOWORD(lp), (float)(short)HIWORD(lp), &g_mouseU, &g_mouseV);
+            float a = ArcAngle(g_mouseU - g_cU, g_mouseV - g_cV);
+            g_rotTarget += WrapPi(a - g_rotLast);
+            g_rot = g_rotTarget;
+            g_rotLast = a;
+            g_hover = TRUE;
+            Render();
             return 0;
         }
         W2L((float)(short)LOWORD(lp), (float)(short)HIWORD(lp), &g_mouseU, &g_mouseV);
@@ -2631,6 +2760,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 iconTry++;
             else
                 iconTry = 0;
+            if (g_zBottom && !g_menuOpen && !g_moving)
+                ApplyZOrder(0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); /* 最奥の位置を保つ */
             int r = RefreshRunning();
             if (r == 2)
             {
@@ -2648,6 +2779,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_moving = TRUE;
             g_pressed = -1;
             g_dragged = TRUE;
+            GetCursorPos(&g_moveStart);
+            g_moveWX = g_posX;
+            g_moveWY = g_posY0;
+            SetCapture(hwnd);
+            return 0;
+        }
+        if (IsRing() && GetKeyState(VK_SHIFT) < 0)
+        { /* 全円: Shift+ドラッグでダイヤルのように回す */
+            float u, v;
+            W2L((float)(short)LOWORD(lp), (float)(short)HIWORD(lp), &u, &v);
+            g_rotating = TRUE;
+            g_pressed = -1;
+            g_dragged = TRUE;
+            g_rotLast = ArcAngle(u - g_cU, v - g_cV);
+            g_rotTarget = g_rot;
             SetCapture(hwnd);
             return 0;
         }
@@ -2659,8 +2805,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetCapture(hwnd);
         return 0;
 
+    case WM_MOUSEWHEEL:
+        if (IsRing() && g_count > 0 && !g_rotating)
+        { /* 全円: ホイール1ノッチでアイコン1個ぶん回る (下へ回すと時計回り) */
+            float delta = (float)(short)HIWORD(wp);
+            g_rotTarget -= (g_base + g_gap) / g_Rref * delta / 120.0f;
+            EnsureTimer();
+            return 0;
+        }
+        break;
+
     case WM_LBUTTONUP:
     {
+        if (g_rotating)
+        {
+            g_rotating = FALSE;
+            g_dragged = FALSE;
+            ReleaseCapture();
+            EnsureTimer();
+            return 0;
+        }
         if (g_moving)
         {
             g_moving = FALSE;
@@ -2713,6 +2877,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_CAPTURECHANGED: /* ドラッグ中断 */
+        if (g_rotating)
+        {
+            g_rotating = FALSE;
+            g_dragged = FALSE;
+            EnsureTimer();
+        }
         if (g_moving)
         {
             g_moving = FALSE;
@@ -2811,16 +2981,26 @@ void Dock_SaveSettings(void)
         SaveConfig();
 }
 
+int Dock_GetZOrder(void) { return g_zBottom ? 1 : 0; } /* 0:最前列 1:最奥 */
+void Dock_SetZOrder(int z)
+{
+    g_zBottom = z != 0;
+    if (g_hwnd)
+        ApplyZOrder(0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+}
+
 int Dock_GetEdge(void) { return g_edge; }
 void Dock_SetEdge(int e)
 {
     g_edge = ClampI(e, 0, 3);
+    g_free = FALSE;
     DockRelayout();
 }
 
 void Dock_ResetPosition(void)
 {
     g_frac = 0.5f;
+    g_free = FALSE;
     DockRelayout();
 }
 
